@@ -36,6 +36,15 @@ u_int64_t display_last_updated_time = esp_timer_get_time();
 
 u_int64_t last_LCD_timer = 0;
 
+/*!!!INPUT BUTTONS!!!*/
+
+#define FEED_INCREASE_BUTTON 15
+#define FEED_DECREASE_BUTTON 5
+
+int feed_up_hold = 0;
+int feed_down_hold = 0;
+
+
 /*!!!TASK!!!*/
 /*!!!Task - setting it up so stepper and encoder are on one core, everything else is on the other core!!!*/
 TaskHandle_t Task1;
@@ -56,8 +65,11 @@ void setup(){
   Serial.begin(115200);
 
   /*Input buttons*/
-  pinMode(15, INPUT);
-  pinMode(4, INPUT);
+  pinMode(FEED_INCREASE_BUTTON, INPUT_PULLUP);
+  pinMode(FEED_DECREASE_BUTTON, INPUT_PULLUP);
+  pinMode(4, INPUT_PULLUP);
+  pinMode(16, INPUT_PULLUP);
+  pinMode(17, INPUT_PULLUP);
 
 
   /*!!!STEPPER DRIVER!!!*/
@@ -107,6 +119,8 @@ void setup(){
 }
 
 void loop(){
+  /*UI updates - check the buttons and set the UI values*/
+  buttonCheck();
   /*Update the display, including calculating things like RPM, thread pitch, feed rate, etc*/
   lcdUpdate();
   /*Display refresh, currently 10hz*/
@@ -200,24 +214,7 @@ void lcdUpdate(){
   }
 
   /*fourth line*/
-
-
-
-
   String feed_string = String("Feed: 0.") +String(String("000") + String(feed_rate)).substring(String(feed_rate).length(),String(String("000") + String(feed_rate)).length()) + String("         ");
-
-  if(digitalRead(15) == 1 && digitalRead(4) == 1){
-    feed_rate = 0;
-  }
-  else if(digitalRead(15) == 1){
-    feed_rate = 5;
-  }
-  else if(digitalRead(4) == 1){
-    feed_rate = 10;
-  }
-  else{
-    feed_rate = 20;
-  }
 
    for(int i = 0; i < 20; i++){
     if (feed_string.charAt(i) != current_LCD_line_4[i]){
@@ -226,17 +223,36 @@ void lcdUpdate(){
       current_LCD_line_4[i] = feed_string.charAt(i);
     }
   } 
+}
 
+void buttonCheck(){
+  if(!digitalRead(FEED_INCREASE_BUTTON)){
+    if(feed_rate < 150){
+      feed_hold_check(FEED_INCREASE_BUTTON);
+    }
+  } else{
+    feed_up_hold = 0;
+  }
+  if(!digitalRead(FEED_DECREASE_BUTTON)){
+    if(feed_rate > 1){
+      feed_hold_check(FEED_DECREASE_BUTTON);
+    }
+  } else{
+    feed_down_hold = 0;
+  }
+}
 
-  /*lcd.setCursor(0, 0);
-  long rpm_display_current_count = (int32_t)encoder.getCount();
-  u_int64_t display_current_update_time = esp_timer_get_time();
-  long rpm_delta = rpm_display_current_count - rpm_display_last_count;
-  lcd.print("Encoder = " + String(String((int32_t)encoder.getCount())+"          ").substring(0,20));
-  lcd.setCursor(0, 1);
-  u_int64_t micros_since_last_update = display_current_update_time - display_last_updated_time;
-  float seconds_since_last_update = micros_since_last_update/1000000.0;
-  lcd.print("RPMs = " + String(String(rpm_delta/2400.0/seconds_since_last_update*60.0)+String("                    ")).substring(0,13));
-  rpm_display_last_count = rpm_display_current_count;
-  display_last_updated_time = display_current_update_time;*/
+void feed_hold_check(int pin){
+  if(pin == FEED_INCREASE_BUTTON){
+    feed_up_hold++;
+    if(feed_up_hold == 1 || feed_up_hold > 10){
+      feed_rate++;
+    }
+  }
+  if(pin == FEED_DECREASE_BUTTON){
+    feed_down_hold++;
+    if(feed_down_hold == 1 || feed_down_hold > 10){
+      feed_rate--;
+    }
+  }
 }

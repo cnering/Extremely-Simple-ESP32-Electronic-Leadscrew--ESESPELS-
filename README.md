@@ -1,1 +1,0 @@
-# ESP_ELS_Working_Stepper_Encoder_Display_20230807
