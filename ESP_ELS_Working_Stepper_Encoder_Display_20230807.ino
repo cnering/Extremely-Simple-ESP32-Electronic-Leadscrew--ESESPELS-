@@ -3,19 +3,36 @@
 #include "FastAccelStepper.h"
 #include <Arduino.h>
 
+
+/*!!!MAGIC NUMBER DEFINITIONS*/
+
+#define LEADSCREW_TPI 8
+#define ENCODER_COUNTS 2400
+#define ENCODER_COUNTS_FLOAT 2400.0
+#define LEADSCREW_ROTATIONS_PER_SPINDLE_ROTATION 0.125
+#define STEPPER_STEPS_PER_REV_FLOAT 2400.0
+#define FINAL_DRIVE_RATIO 1
+
+
 //git test
 /*!!!STEPPER DRIVER!!!*/
-#define dirPinStepper 34
-#define enablePinStepper 35
-#define stepPinStepper 36
+#define STEPPER_DIRECTION_PIN 18
+#define STEPPER_ENABLE_PIN 35
+#define STEPPER_STEP_PIN 19
 
 int step_drives_per_second = 0;
+
+int milli_steps_carryover = 0;
+float running_steps_carryover = 0.0;
 
 FastAccelStepperEngine engine = FastAccelStepperEngine();
 FastAccelStepper *stepper = NULL;
 
 /*!!!ENCODER!!!*/
 ESP32Encoder encoder;
+
+#define ENCODER_PIN_A 33
+#define ENCODER_PIN_B 32
 
 /*!!!LCD!!!*/
 
@@ -30,7 +47,7 @@ char current_LCD_line_2[20];
 char current_LCD_line_3[20];
 char current_LCD_line_4[20];
 
-int feed_rate = 0;
+int feed_rate = 1;
 
 
 u_int64_t display_last_updated_time = esp_timer_get_time();
@@ -42,6 +59,8 @@ u_int64_t last_LCD_timer = 0;
 #define FEED_INCREASE_BUTTON 15
 #define FEED_DECREASE_BUTTON 5
 #define MODE_SELECT_BUTTON 17
+#define SET_SELECTION_BUTTON 4
+#define ON_OFF_BUTTON 16
 
 #define FEED_MODE 0
 #define TPI_MODE 1
@@ -82,6 +101,8 @@ u_long rpm_display_last_count = 0;
 
 void setup(){
 
+  /*Defining all the metric pitches*/
+
   metric_pitches[0] = "0.35";
   metric_pitches[1] = "0.40";
   metric_pitches[2] = "0.45";
@@ -108,24 +129,29 @@ void setup(){
   /*Input buttons*/
   pinMode(FEED_INCREASE_BUTTON, INPUT_PULLUP);
   pinMode(FEED_DECREASE_BUTTON, INPUT_PULLUP);
-  pinMode(4, INPUT_PULLUP);
-  pinMode(16, INPUT_PULLUP);
+  pinMode(SET_SELECTION_BUTTON, INPUT_PULLUP);
+  pinMode(ON_OFF_BUTTON, INPUT_PULLUP);
   pinMode(MODE_SELECT_BUTTON, INPUT_PULLUP);
 
 
   /*!!!STEPPER DRIVER!!!*/
-  stepper = engine.stepperConnectToPin(0,DRIVER_RMT);
+  engine.init();
+  stepper = engine.stepperConnectToPin(STEPPER_STEP_PIN,DRIVER_RMT);
   if (stepper) {
-      //stepper->setAutoEnable(true);
+      stepper->setDirectionPin(STEPPER_DIRECTION_PIN);
+      stepper->setAutoEnable(true);
 
-      //stepper->setSpeedInUs(1000);  // the parameter is us/step !!!
-      //stepper->setAcceleration(10000);
+      stepper->setSpeedInUs(5);  // the parameter is us/step !!!
+      stepper->setAcceleration(1000000);
+      stepper->move(1000);
       //stepper->move(70);
       //stepper->runForward();
     } else {
       Serial.println("Stepper Not initialized!");
       delay(1000);
     }
+
+    
 
   /*!!!ENCODER!!!*/
   // Enable the weak pull down resistors
@@ -136,7 +162,7 @@ void setup(){
   //CAN ATTACH MULTIPLE ENCODERS TO FIX PCNT/RMT ISSUE
   //Uncomment this to run two encoders to fix the stupid PRNT library thing
   //encoder0.attachFullQuad(17, 16);
-  encoder.attachFullQuad(33, 32);
+  encoder.attachFullQuad(ENCODER_PIN_A, ENCODER_PIN_B);
 
   /*!!!LCD!!!*/
   // initialize LCD
@@ -185,17 +211,18 @@ void high_priority_loop(void * parameter){
       /*get the numerical number of rotations since we last checked*/
       /*encoder is 600 p/r, with quadrature that's 2,400 counts per rotation.  This gives us a decimal representation of the percentage that the spindle has turned since we last checked*/
       /*2,400 counts per revolution on an 8 TPI leadscrew means a resolution of 0.000052 inches per encoder step, which is insane*/
-      float rotation = counts_delta/2400.0;
+      //float rotation = counts_delta/2400.0;
       
       /*Set the global last_rotation to this value, MAY NOT NEED*/
       //last_rotation = rotation;
-      stepper->move(counts_delta);
+      calculateStepsToMoveFLOAT(counts_delta);
+      //stepper->move(counts_delta);
       step_drives_per_second++;
     }
     /*Debugging, just outputting the calculations per second*/
     if(cur_timer - last_timer > 1000000){
-      Serial.println(calculations_per_second);
-      Serial.println(step_drives_per_second);
+      //Serial.println(calculations_per_second);
+      //Serial.println(step_drives_per_second);
       calculations_per_second = 0;
       step_drives_per_second = 0;
       last_timer = cur_timer;
@@ -208,7 +235,110 @@ void high_priority_loop(void * parameter){
   }
 }
 
-void moveStepperToPosition(int counts){
+long lastmillis = 0;
+
+void calculateStepsToMoveFLOAT(int encoder_counts){
+  int rotation_direction = encoder_counts / abs(encoder_counts);
+  encoder_counts = abs(encoder_counts);
+  float rotation_proportion = encoder_counts / ENCODER_COUNTS_FLOAT;
+  float related_rotation = rotation_proportion * (feed_rate / 1000.0)/LEADSCREW_ROTATIONS_PER_SPINDLE_ROTATION;
+
+  float decimal_steps = related_rotation * ENCODER_COUNTS_FLOAT * (STEPPER_STEPS_PER_REV_FLOAT/ENCODER_COUNTS_FLOAT);
+
+  float current_carry_over = decimal_steps - (int)decimal_steps;
+
+  //if(millis() - lastmillis > 1000){
+  //  Serial.println(rotation_proportion,6);
+  //  Serial.println(related_rotation,6);
+  //  Serial.println(decimal_steps,6);
+  //  Serial.println(carry_over,12);
+  //  lastmillis = millis();
+  //}
+
+  
+
+  if(current_carry_over + running_steps_carryover > 1.0){
+    decimal_steps++;
+    running_steps_carryover = current_carry_over + running_steps_carryover - 1.0;
+  } else{
+    running_steps_carryover = running_steps_carryover + current_carry_over;
+  }
+  moveStepperToPosition(decimal_steps*rotation_direction*FINAL_DRIVE_RATIO);
+  
+
+}
+
+void calculateStepsToMove(int encoder_counts){
+  //encoder pulses 2400 times per rev
+  //leadscrew moves .125" per rev
+  //each step moves the saddle .00005208 inches
+
+  //multiply everything by 1,000,000, that gives us 52 micro-inches per step
+
+  //if we do everything in microinches, we don't need to mess with floats maybe
+
+  //first, get the thou per rotation
+  //then, convert it to microinches
+
+  //find the number of millisteps so we can ceep track of fractional steps without float imprecision
+  int milli_steps = encoder_counts * 1000;
+
+  //1 thou per revolution = 1 thou*8
+
+  //distance per revolution
+
+  //2400 at 1:1 is .125
+  //2400 at X is 0.001
+
+  //if matched, then it works out to 125 thou per rotation
+
+  //2400 x RATIO = .125 * 2400
+  //2400 x .125 * RATIO(.125/.125) = 300
+  //2400 x .125 * (.001/.125) = 2.4 steps
+
+  float final_ratio = (feed_rate/125000.0);
+
+  long long milli_steps_needed = 2400000 * 125 * feed_rate*1000/125000*milli_steps;
+  int milli_steps_remainder = milli_steps_needed%1000;
+
+  //Serial.println(feed_rate);
+  //Serial.println(milli_steps);
+  //Serial.println(milli_steps_needed);
+  //Serial.println(milli_steps_remainder);
+
+  if(milli_steps_remainder != 0){
+    if(milli_steps_remainder + milli_steps_carryover > 1000){
+      milli_steps_needed = milli_steps_needed + 1000;
+      milli_steps_carryover = milli_steps_carryover + milli_steps_remainder - 1000;
+    } else{
+      milli_steps_carryover = milli_steps_carryover + milli_steps_remainder;
+    }
+  }
+
+
+
+
+  //2400 at 1 thou = (.001/8) / 2400
+
+  //long microinches_of_travel_needed = (feed_rate * 1000 * encoder_counts)/2400*LEADSCREW_TPI;
+
+  //int steps_from_travel_needed = microinches_of_travel_needed/52;
+
+  //Serial.println("encoder = " + encoder_counts);
+  //Serial.println("microinches needed = " + microinches_of_travel_needed);
+  //Serial.println("steps calculated = " + steps_from_travel_needed);
+
+  //next, figure out how many microinches we need to move
+
+  long steps_from_travel_needed = milli_steps_needed / 1000;
+
+  moveStepperToPosition(steps_from_travel_needed);
+
+  //delay(100);
+
+}
+
+void moveStepperToPosition(long counts){
   stepper->move(counts);
 }
 
