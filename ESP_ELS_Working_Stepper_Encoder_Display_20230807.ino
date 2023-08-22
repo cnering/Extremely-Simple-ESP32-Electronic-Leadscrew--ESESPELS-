@@ -3,15 +3,18 @@
 #include "FastAccelStepper.h"
 #include <Arduino.h>
 
+//google drive test
 
 /*!!!MAGIC NUMBER DEFINITIONS*/
 
 #define LEADSCREW_TPI 8
+#define LEADSCREW_TPI_FLOAT 8.0
+#define LEADSCREW_THOU_PER_REVOLUTION 125.0
 #define ENCODER_COUNTS 2400
 #define ENCODER_COUNTS_FLOAT 2400.0
 #define LEADSCREW_ROTATIONS_PER_SPINDLE_ROTATION 0.125
 #define STEPPER_STEPS_PER_REV_FLOAT 2400.0
-#define FINAL_DRIVE_RATIO 1
+#define FINAL_DRIVE_RATIO 4
 
 
 //git test
@@ -24,6 +27,8 @@ int step_drives_per_second = 0;
 
 int milli_steps_carryover = 0;
 float running_steps_carryover = 0.0;
+
+long total_steps_moved = 0;
 
 FastAccelStepperEngine engine = FastAccelStepperEngine();
 FastAccelStepper *stepper = NULL;
@@ -47,7 +52,12 @@ char current_LCD_line_2[20];
 char current_LCD_line_3[20];
 char current_LCD_line_4[20];
 
+/*global variables for current feed positions and rate*/
 int feed_rate = 1;
+int tpi_rate = 23;
+int metric_pitch = 21;
+/*direction - positive - forward, negative = backwards*/
+int UI_direction = 1;
 
 
 u_int64_t display_last_updated_time = esp_timer_get_time();
@@ -56,11 +66,11 @@ u_int64_t last_LCD_timer = 0;
 
 /*!!!INPUT BUTTONS!!!*/
 
-#define FEED_INCREASE_BUTTON 15
+#define FEED_INCREASE_BUTTON 4
 #define FEED_DECREASE_BUTTON 5
 #define MODE_SELECT_BUTTON 17
-#define SET_SELECTION_BUTTON 4
-#define ON_OFF_BUTTON 16
+#define DIRECTION_BUTTON 16
+#define ON_OFF_BUTTON 14
 
 #define FEED_MODE 0
 #define TPI_MODE 1
@@ -74,13 +84,15 @@ int feed_up_hold = 0;
 int feed_down_hold = 0;
 
 int run_mode_debounce = 0;
+int feed_direction_debounce = 0;
 
 int run_mode = 0;
 int tpi = 0;
 int pitch = 0;
 
 
-String metric_pitches[20] = {};
+String metric_pitches[22] = {};
+String inch_TPIs[24] = {};
 
 
 
@@ -103,33 +115,62 @@ void setup(){
 
   /*Defining all the metric pitches*/
 
-  metric_pitches[0] = "0.35";
-  metric_pitches[1] = "0.40";
-  metric_pitches[2] = "0.45";
-  metric_pitches[3] = "0.50";
-  metric_pitches[4] = "0.60";
-  metric_pitches[5] = "0.70";
-  metric_pitches[6] = "0.80";
-  metric_pitches[7] = "1.00";
-  metric_pitches[8] = "1.25";
-  metric_pitches[9] = "1.50";
-  metric_pitches[10] = "1.75";
-  metric_pitches[11] = "2.00";
-  metric_pitches[12] = "2.50";
-  metric_pitches[13] = "3.00";
-  metric_pitches[14] = "3.50";
-  metric_pitches[15] = "4.00";
-  metric_pitches[16] = "4.50";
-  metric_pitches[17] = "5.00";
-  metric_pitches[18] = "5.50";
-  metric_pitches[19] = "6.00";
+  metric_pitches[0] = "0.25";
+  metric_pitches[1] = "0.30";
+  metric_pitches[2] = "0.35";
+  metric_pitches[3] = "0.40";
+  metric_pitches[4] = "0.45";
+  metric_pitches[5] = "0.50";
+  metric_pitches[6] = "0.60";
+  metric_pitches[7] = "0.70";
+  metric_pitches[8] = "0.80";
+  metric_pitches[9] = "1.00";
+  metric_pitches[10] = "1.25";
+  metric_pitches[11] = "1.50";
+  metric_pitches[12] = "1.75";
+  metric_pitches[13] = "2.00";
+  metric_pitches[14] = "2.50";
+  metric_pitches[15] = "3.00";
+  metric_pitches[16] = "3.50";
+  metric_pitches[17] = "4.00";
+  metric_pitches[18] = "4.50";
+  metric_pitches[19] = "5.00";
+  metric_pitches[20] = "5.50";
+  metric_pitches[21] = "6.00";
+
+  /*Defining all inch TPIs*/
+
+  inch_TPIs[0] = "8";
+  inch_TPIs[1] = "9";
+  inch_TPIs[2] = "10";
+  inch_TPIs[3] = "11";
+  inch_TPIs[4] = "11.5";
+  inch_TPIs[5] = "12";
+  inch_TPIs[6] = "13";
+  inch_TPIs[7] = "14";
+  inch_TPIs[8] = "16";
+  inch_TPIs[9] = "18";
+  inch_TPIs[10] = "19";
+  inch_TPIs[11] = "20";
+  inch_TPIs[12] = "24";
+  inch_TPIs[13] = "26";
+  inch_TPIs[14] = "27";
+  inch_TPIs[15] = "28";
+  inch_TPIs[16] = "32";
+  inch_TPIs[17] = "36";
+  inch_TPIs[18] = "40";
+  inch_TPIs[19] = "44";
+  inch_TPIs[20] = "48";
+  inch_TPIs[21] = "56";
+  inch_TPIs[22] = "64";
+  inch_TPIs[23] = "80";
 
   Serial.begin(115200);
 
   /*Input buttons*/
   pinMode(FEED_INCREASE_BUTTON, INPUT_PULLUP);
   pinMode(FEED_DECREASE_BUTTON, INPUT_PULLUP);
-  pinMode(SET_SELECTION_BUTTON, INPUT_PULLUP);
+  pinMode(DIRECTION_BUTTON, INPUT_PULLUP);
   pinMode(ON_OFF_BUTTON, INPUT_PULLUP);
   pinMode(MODE_SELECT_BUTTON, INPUT_PULLUP);
 
@@ -143,7 +184,7 @@ void setup(){
 
       stepper->setSpeedInUs(5);  // the parameter is us/step !!!
       stepper->setAcceleration(1000000);
-      stepper->move(1000);
+      //stepper->move(1000);
       //stepper->move(70);
       //stepper->runForward();
     } else {
@@ -238,24 +279,30 @@ void high_priority_loop(void * parameter){
 long lastmillis = 0;
 
 void calculateStepsToMoveFLOAT(int encoder_counts){
-  int rotation_direction = encoder_counts / abs(encoder_counts);
+
+  float current_feed_rate = 0.0;
+  if(run_mode == 0){
+    current_feed_rate = float(feed_rate);
+  } else if(run_mode == 1){
+    current_feed_rate = tpiToThouPerRev(inch_TPIs[tpi_rate].toFloat());
+  } else if(run_mode == 2){
+    current_feed_rate = metricPitchToThouPerRev(metric_pitches[pitch].toFloat());
+  } else{
+    current_feed_rate = 0.0;
+  }
+
+  int rotation_direction = 1;
+  if(encoder_counts < 0){
+    rotation_direction = -1;
+  }
   encoder_counts = abs(encoder_counts);
   float rotation_proportion = encoder_counts / ENCODER_COUNTS_FLOAT;
-  float related_rotation = rotation_proportion * (feed_rate / 1000.0)/LEADSCREW_ROTATIONS_PER_SPINDLE_ROTATION;
-
+  float related_rotation = rotation_proportion * (current_feed_rate / 1000.0)/LEADSCREW_ROTATIONS_PER_SPINDLE_ROTATION;
+//Serial.println(related_rotation,10);
   float decimal_steps = related_rotation * ENCODER_COUNTS_FLOAT * (STEPPER_STEPS_PER_REV_FLOAT/ENCODER_COUNTS_FLOAT);
-
+//Serial.println(decimal_steps,10);
   float current_carry_over = decimal_steps - (int)decimal_steps;
-
-  //if(millis() - lastmillis > 1000){
-  //  Serial.println(rotation_proportion,6);
-  //  Serial.println(related_rotation,6);
-  //  Serial.println(decimal_steps,6);
-  //  Serial.println(carry_over,12);
-  //  lastmillis = millis();
-  //}
-
-  
+ 
 
   if(current_carry_over + running_steps_carryover > 1.0){
     decimal_steps++;
@@ -263,11 +310,180 @@ void calculateStepsToMoveFLOAT(int encoder_counts){
   } else{
     running_steps_carryover = running_steps_carryover + current_carry_over;
   }
-  moveStepperToPosition(decimal_steps*rotation_direction*FINAL_DRIVE_RATIO);
-  
+  moveStepperToPosition(decimal_steps*rotation_direction*FINAL_DRIVE_RATIO*UI_direction);
 
 }
 
+float tpiToThouPerRev(float tpi){
+  
+  /*Calcualte the thou per rev for an imperial thread.  Do this by taking the leadscrew pitch (.125) and figuring out how many thou to move per rev*/
+  float tpi_to_thou = LEADSCREW_THOU_PER_REVOLUTION*(LEADSCREW_TPI_FLOAT / tpi);
+  //Serial.println(tpi_to_thou);
+  //Serial.println(inch_TPIs[tpi_rate].toFloat());
+  return tpi_to_thou;
+
+}
+
+float metricPitchToThouPerRev(float pitch){
+  
+  /*Calcualte the thou per rev for a metric thread.  Do this by converting the pitch to thou, then taking the leadscrew pitch (.125) and figuring out how many thou to move per rev*/
+  //Serial.println(pitch);
+  float thou_from_pitch = pitch * 39.3701;
+  //Serial.println(thou_from_pitch);
+  return thou_from_pitch;
+}
+
+void moveStepperToPosition(long counts){
+  total_steps_moved = total_steps_moved + counts;
+  stepper->move(counts);
+}
+
+
+
+void lcdUpdate(){
+
+  last_display_refresh++;
+
+  if(last_display_refresh >= 10/DISPLAY_REFRESH_HZ){
+
+    last_display_refresh = 0;
+
+    String encoder_pos = String("E=" + String(String((int32_t)encoder.getCount())+"     S="+ String(total_steps_moved) + "          ").substring(0,20));
+
+    /*first line*/
+    
+    for(int i = 0; i < 20; i++){
+      if (encoder_pos.charAt(i) != current_LCD_line_1[i]){
+        lcd.setCursor(i,0);
+        lcd.print(encoder_pos[i]);
+        current_LCD_line_1[i] = encoder_pos.charAt(i);
+      }
+    }
+    
+    
+    /*second line*/
+    long rpm_display_current_count = (int32_t)encoder.getCount();
+    u_int64_t display_current_update_time = esp_timer_get_time();
+    long rpm_delta = rpm_display_current_count - rpm_display_last_count;
+    u_int64_t micros_since_last_update = display_current_update_time - display_last_updated_time;
+    float seconds_since_last_update = micros_since_last_update/1000000.0;
+    float current_RPMs = rpm_delta/2400.0/seconds_since_last_update*60.0;
+    String RPMs_current = "RPMs = " + String(String(current_RPMs)+String("                    ")).substring(0,13);
+    rpm_display_last_count = rpm_display_current_count;
+    display_last_updated_time = display_current_update_time;
+    for(int i = 0; i < 20; i++){
+      if (RPMs_current.charAt(i) != current_LCD_line_2[i]){
+        lcd.setCursor(i,1);
+        lcd.print(RPMs_current[i]);
+        current_LCD_line_2[i] = RPMs_current.charAt(i);
+      }
+    }
+
+    /*third line*/
+    String sfm_current = "SFM @ 1in: "+ String(String(current_RPMs/3.82) + String("            ")).substring(0,10);
+
+    for(int i = 0; i < 20; i++){
+      if (sfm_current.charAt(i) != current_LCD_line_3[i]){
+        lcd.setCursor(i,2);
+        lcd.print(sfm_current[i]);
+        current_LCD_line_3[i] = sfm_current.charAt(i);
+      }
+    }
+  }
+
+  String feed_string = "";
+  /*fourth line*/
+  if(run_mode == 0){
+    feed_string = String("Feed: 0.") +String(String("000") + String(feed_rate)).substring(String(feed_rate).length(),String(String("000") + String(feed_rate)).length()) + String("         ");
+  } else if(run_mode == 1){
+    feed_string = String("TPI: ") + inch_TPIs[tpi_rate] + String("              ");
+  } else if(run_mode == 2){
+    feed_string = String("Pitch: ") + metric_pitches[pitch] + "         ";
+  } else{
+    //do nothing
+  }
+  
+
+   for(int i = 0; i < 20; i++){
+    if (feed_string.charAt(i) != current_LCD_line_4[i]){
+      lcd.setCursor(i,3);
+      lcd.print(feed_string[i]);
+      current_LCD_line_4[i] = feed_string.charAt(i);
+    }
+  } 
+}
+
+void buttonCheck(){
+  if(!digitalRead(FEED_INCREASE_BUTTON)){
+    if(feed_rate < 150){
+      feed_hold_check(FEED_INCREASE_BUTTON);
+    }
+  } else{
+    feed_up_hold = 0;
+  }
+  if(!digitalRead(FEED_DECREASE_BUTTON)){
+    if(feed_rate > 1){
+      feed_hold_check(FEED_DECREASE_BUTTON);
+    }
+  } else{
+    feed_down_hold = 0;
+  }
+  if(!digitalRead(MODE_SELECT_BUTTON)){
+    run_mode_debounce++;
+    if(run_mode_debounce == 2){
+      if(run_mode == 2){
+        run_mode = 0;
+      } else{
+        run_mode++;
+      }
+    }
+  } else{
+    run_mode_debounce = 0;
+  }
+  if(!digitalRead(DIRECTION_BUTTON)){
+    feed_direction_debounce++;
+    if(feed_direction_debounce == 2){
+      UI_direction = UI_direction * -1;
+    }
+  } else{
+    feed_direction_debounce = 0;
+  }
+}
+
+void feed_hold_check(int pin){
+  if(pin == FEED_INCREASE_BUTTON){
+    feed_up_hold++;
+    if(feed_up_hold == 1 || feed_up_hold > 10){
+      if(run_mode == FEED_MODE){
+        feed_rate++;
+      } else if(run_mode == TPI_MODE && tpi_rate < 23){
+        tpi_rate++;
+      } else if(run_mode == PITCH_MODE && pitch < 20){
+        pitch++;
+      } else{
+        //do nothing
+      }
+      
+    }
+  }
+  if(pin == FEED_DECREASE_BUTTON){
+    feed_down_hold++;
+    if(feed_down_hold == 1 || feed_down_hold > 10){
+      if(run_mode == FEED_MODE){
+        feed_rate--;
+      } else if(run_mode == TPI_MODE && tpi_rate > 0){
+        tpi_rate--;
+      } else if(run_mode == PITCH_MODE && pitch > 0){
+        pitch--;
+      } else{
+        //do nothing
+      }
+    }
+  }
+}
+
+/*OLD THING*/
+/*
 void calculateStepsToMove(int encoder_counts){
   //encoder pulses 2400 times per rev
   //leadscrew moves .125" per rev
@@ -337,143 +553,4 @@ void calculateStepsToMove(int encoder_counts){
   //delay(100);
 
 }
-
-void moveStepperToPosition(long counts){
-  stepper->move(counts);
-}
-
-
-
-void lcdUpdate(){
-
-  last_display_refresh++;
-
-  if(last_display_refresh >= 10/DISPLAY_REFRESH_HZ){
-
-    last_display_refresh = 0;
-
-    String encoder_pos = String("Encoder = " + String(String((int32_t)encoder.getCount())+"          ").substring(0,20));
-
-    /*first line*/
-    
-    for(int i = 0; i < 20; i++){
-      if (encoder_pos.charAt(i) != current_LCD_line_1[i]){
-        lcd.setCursor(i,0);
-        lcd.print(encoder_pos[i]);
-        current_LCD_line_1[i] = encoder_pos.charAt(i);
-      }
-    }
-    
-    
-    /*second line*/
-    long rpm_display_current_count = (int32_t)encoder.getCount();
-    u_int64_t display_current_update_time = esp_timer_get_time();
-    long rpm_delta = rpm_display_current_count - rpm_display_last_count;
-    u_int64_t micros_since_last_update = display_current_update_time - display_last_updated_time;
-    float seconds_since_last_update = micros_since_last_update/1000000.0;
-    float current_RPMs = rpm_delta/2400.0/seconds_since_last_update*60.0;
-    String RPMs_current = "RPMs = " + String(String(current_RPMs)+String("                    ")).substring(0,13);
-    rpm_display_last_count = rpm_display_current_count;
-    display_last_updated_time = display_current_update_time;
-    for(int i = 0; i < 20; i++){
-      if (RPMs_current.charAt(i) != current_LCD_line_2[i]){
-        lcd.setCursor(i,1);
-        lcd.print(RPMs_current[i]);
-        current_LCD_line_2[i] = RPMs_current.charAt(i);
-      }
-    }
-
-    /*third line*/
-    String sfm_current = "SFM @ 1in: "+ String(String(current_RPMs/3.82) + String("            ")).substring(0,10);
-
-    for(int i = 0; i < 20; i++){
-      if (sfm_current.charAt(i) != current_LCD_line_3[i]){
-        lcd.setCursor(i,2);
-        lcd.print(sfm_current[i]);
-        current_LCD_line_3[i] = sfm_current.charAt(i);
-      }
-    }
-  }
-
-  String feed_string = "";
-  /*fourth line*/
-  if(run_mode == 0){
-    feed_string = String("Feed: 0.") +String(String("000") + String(feed_rate)).substring(String(feed_rate).length(),String(String("000") + String(feed_rate)).length()) + String("         ");
-  } else if(run_mode == 1){
-    feed_string = String("TPI: ") +String(String("000") + String(tpi)).substring(String(tpi).length(),String(String("000") + String(tpi)).length()) + String("            ");
-  } else if(run_mode == 2){
-    feed_string = String("Pitch: ") + metric_pitches[pitch] + "         ";
-  } else{
-    //do nothing
-  }
-  
-
-   for(int i = 0; i < 20; i++){
-    if (feed_string.charAt(i) != current_LCD_line_4[i]){
-      lcd.setCursor(i,3);
-      lcd.print(feed_string[i]);
-      current_LCD_line_4[i] = feed_string.charAt(i);
-    }
-  } 
-}
-
-void buttonCheck(){
-  if(!digitalRead(FEED_INCREASE_BUTTON)){
-    if(feed_rate < 150){
-      feed_hold_check(FEED_INCREASE_BUTTON);
-    }
-  } else{
-    feed_up_hold = 0;
-  }
-  if(!digitalRead(FEED_DECREASE_BUTTON)){
-    if(feed_rate > 1){
-      feed_hold_check(FEED_DECREASE_BUTTON);
-    }
-  } else{
-    feed_down_hold = 0;
-  }
-  if(!digitalRead(MODE_SELECT_BUTTON)){
-    run_mode_debounce++;
-    if(run_mode_debounce == 2){
-      if(run_mode == 2){
-        run_mode = 0;
-      } else{
-        run_mode++;
-      }
-    }
-  } else{
-    run_mode_debounce = 0;
-  }
-}
-
-void feed_hold_check(int pin){
-  if(pin == FEED_INCREASE_BUTTON){
-    feed_up_hold++;
-    if(feed_up_hold == 1 || feed_up_hold > 10){
-      if(run_mode == FEED_MODE){
-        feed_rate++;
-      } else if(run_mode == TPI_MODE){
-        tpi++;
-      } else if(run_mode == PITCH_MODE && pitch < 20){
-        pitch++;
-      } else{
-        //do nothing
-      }
-      
-    }
-  }
-  if(pin == FEED_DECREASE_BUTTON){
-    feed_down_hold++;
-    if(feed_down_hold == 1 || feed_down_hold > 10){
-      if(run_mode == FEED_MODE){
-        feed_rate--;
-      } else if(run_mode == TPI_MODE){
-        tpi--;
-      } else if(run_mode == PITCH_MODE && pitch > 0){
-        pitch--;
-      } else{
-        //do nothing
-      }
-    }
-  }
-}
+*/
