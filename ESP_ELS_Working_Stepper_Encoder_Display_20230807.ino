@@ -2,48 +2,34 @@
 #include <ESP32Encoder.h>
 #include "FastAccelStepper.h"
 #include <Arduino.h>
-
-//google drive test
+#include "tables.h"
 
 /*!!!MAGIC NUMBER DEFINITIONS*/
-
-#define LEADSCREW_TPI 8
-#define LEADSCREW_TPI_FLOAT 8.0
-#define LEADSCREW_THOU_PER_REVOLUTION 125.0
-#define ENCODER_COUNTS 2400
-#define ENCODER_COUNTS_FLOAT 2400.0
-#define LEADSCREW_ROTATIONS_PER_SPINDLE_ROTATION 0.125
-#define STEPPER_STEPS_PER_REV_FLOAT 2400.0
+#define ENCODER_COUNTS_FULL_REV 2400.0
+#define STEPPER_STEPS_FULL_REV 2400.0
+#define LEADSCREW_THOU_PER_REV 125.0
 #define FINAL_DRIVE_RATIO 4
 
+/*===============================================*/
 
-//git test
-/*!!!STEPPER DRIVER!!!*/
-#define STEPPER_DIRECTION_PIN 18
-#define STEPPER_ENABLE_PIN 35
-#define STEPPER_STEP_PIN 19
+/*!!!MODE DEFINES!!!*/
+#define FEED_MODE 0
+#define TPI_MODE 1
+#define PITCH_MODE 2
 
-int step_drives_per_second = 0;
+/*===============================================*/
 
-int milli_steps_carryover = 0;
-float running_steps_carryover = 0.0;
+/*!!!UI REFRESH RATES IN HZ!!!*/
+#define LCD_REFRESH_RATE 1
+#define BUTTON_REFRESH_RATE 30
 
-long total_steps_moved = 0;
-
-FastAccelStepperEngine engine = FastAccelStepperEngine();
-FastAccelStepper *stepper = NULL;
-
-/*!!!ENCODER!!!*/
-ESP32Encoder encoder;
-
-#define ENCODER_PIN_A 33
-#define ENCODER_PIN_B 32
-
-/*!!!LCD!!!*/
-
+/*!!!UI GLOBAL VARIABLES!!!*/
 // set the LCD number of columns and rows
 int lcdColumns = 20;
 int lcdRows = 4;
+u_long rpm_display_last_count = 0;
+u_int64_t display_last_updated_time = esp_timer_get_time();
+unsigned long display_millis = 0;
 
 LiquidCrystal_I2C lcd(0x27, lcdColumns, lcdRows);
 
@@ -52,31 +38,24 @@ char current_LCD_line_2[20];
 char current_LCD_line_3[20];
 char current_LCD_line_4[20];
 
-/*global variables for current feed positions and rate*/
-int feed_rate = 1;
-int tpi_rate = 23;
-int metric_pitch = 21;
-/*direction - positive - forward, negative = backwards*/
-int UI_direction = 1;
+/*===============================================*/
 
-
-u_int64_t display_last_updated_time = esp_timer_get_time();
-
-u_int64_t last_LCD_timer = 0;
-
-/*!!!INPUT BUTTONS!!!*/
-
+/*!!!INPUT BUTTON DEFINES!!!*/
 #define FEED_INCREASE_BUTTON 4
 #define FEED_DECREASE_BUTTON 5
 #define MODE_SELECT_BUTTON 17
 #define DIRECTION_BUTTON 16
 #define ON_OFF_BUTTON 14
 
-#define FEED_MODE 0
-#define TPI_MODE 1
-#define PITCH_MODE 2
+#define MAX_FEED_RATE 150
 
-#define DISPLAY_REFRESH_HZ 1
+/*!!!INPUT BUTTON GLOBAL VARIABLES!!!*/
+/*global variables for current feed positions and rate*/
+int feed_rate = 1;
+int tpi_current_selected = 23;
+int metric_pitch_current_selected = 21;
+/*direction - positive = forward, negative = backwards*/
+int UI_direction = 1;
 
 int last_display_refresh = 0;
 
@@ -85,85 +64,66 @@ int feed_down_hold = 0;
 
 int run_mode_debounce = 0;
 int feed_direction_debounce = 0;
+int on_off_debounce = 0;
 
-int run_mode = 0;
-int tpi = 0;
-int pitch = 0;
+int run_mode = FEED_MODE;
 
+int UI_on_off = 1;
 
-String metric_pitches[22] = {};
-String inch_TPIs[24] = {};
-
+unsigned long button_check_refresh_millis = 0;
 
 
-/*!!!TASK!!!*/
+/*===============================================*/
+
+/*!!!STEPPER DRIVER DEFINES!!!*/
+#define STEPPER_DIRECTION_PIN 18
+#define STEPPER_ENABLE_PIN 35
+#define STEPPER_STEP_PIN 19
+
+#define STEPPER_ACCELERATION 1000000
+
+/*!!!STEPPER DRIVER GLOBAL VARIABLES!!!*/
+//Carryover for when we need to move fractional steps, this way we don't lose accuracy
+float running_steps_carryover = 0.0;
+
+//Debugging, calculating the total number of steps moved to verify the steps being commanded are the correct steps
+long total_steps_moved = 0;
+
+FastAccelStepperEngine engine = FastAccelStepperEngine();
+FastAccelStepper *stepper = NULL;
+
+/*===============================================*/
+
+/*!!!ENCODER DEFINES!!!*/
+#define ENCODER_PIN_A 33
+#define ENCODER_PIN_B 32
+
+/*!!!ENCODER GLOBAL VARIABLES!!!*/
+
+/*!!!ENCODER!!!*/
+ESP32Encoder encoder;
+
+/*===============================================*/
+
+/*!!!HIGH PRIORITY THREAD TASK!!!*/
 /*!!!Task - setting it up so stepper and encoder are on one core, everything else is on the other core!!!*/
 TaskHandle_t Task1;
 
-
 long last_count = 0;
 
-u_int64_t last_timer = 0;
+/*===============================================*/
 
-u_long calculations_per_second = 0;
+/*!!!DEBUGGING VARIABLES!!!*/
 
-u_long rpm_display_last_count = 0;
 
-//float last_rotation = 0.0;
+//u_int64_t last_timer = 0;
+//u_long calculations_per_second = 0;
+
+
 
 void setup(){
 
-  /*Defining all the metric pitches*/
-
-  metric_pitches[0] = "0.25";
-  metric_pitches[1] = "0.30";
-  metric_pitches[2] = "0.35";
-  metric_pitches[3] = "0.40";
-  metric_pitches[4] = "0.45";
-  metric_pitches[5] = "0.50";
-  metric_pitches[6] = "0.60";
-  metric_pitches[7] = "0.70";
-  metric_pitches[8] = "0.80";
-  metric_pitches[9] = "1.00";
-  metric_pitches[10] = "1.25";
-  metric_pitches[11] = "1.50";
-  metric_pitches[12] = "1.75";
-  metric_pitches[13] = "2.00";
-  metric_pitches[14] = "2.50";
-  metric_pitches[15] = "3.00";
-  metric_pitches[16] = "3.50";
-  metric_pitches[17] = "4.00";
-  metric_pitches[18] = "4.50";
-  metric_pitches[19] = "5.00";
-  metric_pitches[20] = "5.50";
-  metric_pitches[21] = "6.00";
-
-  /*Defining all inch TPIs*/
-
-  inch_TPIs[0] = "8";
-  inch_TPIs[1] = "9";
-  inch_TPIs[2] = "10";
-  inch_TPIs[3] = "11";
-  inch_TPIs[4] = "11.5";
-  inch_TPIs[5] = "12";
-  inch_TPIs[6] = "13";
-  inch_TPIs[7] = "14";
-  inch_TPIs[8] = "16";
-  inch_TPIs[9] = "18";
-  inch_TPIs[10] = "19";
-  inch_TPIs[11] = "20";
-  inch_TPIs[12] = "24";
-  inch_TPIs[13] = "26";
-  inch_TPIs[14] = "27";
-  inch_TPIs[15] = "28";
-  inch_TPIs[16] = "32";
-  inch_TPIs[17] = "36";
-  inch_TPIs[18] = "40";
-  inch_TPIs[19] = "44";
-  inch_TPIs[20] = "48";
-  inch_TPIs[21] = "56";
-  inch_TPIs[22] = "64";
-  inch_TPIs[23] = "80";
+  populateArrays();
 
   Serial.begin(115200);
 
@@ -183,10 +143,7 @@ void setup(){
       stepper->setAutoEnable(true);
 
       stepper->setSpeedInUs(5);  // the parameter is us/step !!!
-      stepper->setAcceleration(1000000);
-      //stepper->move(1000);
-      //stepper->move(70);
-      //stepper->runForward();
+      stepper->setAcceleration(STEPPER_ACCELERATION);
     } else {
       Serial.println("Stepper Not initialized!");
       delay(1000);
@@ -229,10 +186,9 @@ void setup(){
 void loop(){
   /*UI updates - check the buttons and set the UI values*/
   buttonCheck();
+  
   /*Update the display, including calculating things like RPM, thread pitch, feed rate, etc*/
   lcdUpdate();
-  /*Display refresh, currently 10hz*/
-  delay(100);
 }
 
 void high_priority_loop(void * parameter){
@@ -240,7 +196,7 @@ void high_priority_loop(void * parameter){
     u_int64_t cur_timer = esp_timer_get_time();
     
     //debugging, figuring out how many calculations per second can be achieved, this should not run in prod
-    calculations_per_second++;
+    //calculations_per_second++;
     
     /*record current encoder counts to compare to previous counts to find distance travelled since last check*/
     int32_t cur_count = encoder.getCount();
@@ -248,7 +204,7 @@ void high_priority_loop(void * parameter){
     int counts_delta = cur_count - last_count;
     
     /*if we haven't moved, don't do anything, otherwise drive to new location*/
-    if(counts_delta != 0){
+    if(counts_delta != 0 && UI_on_off == 1){
       /*get the numerical number of rotations since we last checked*/
       /*encoder is 600 p/r, with quadrature that's 2,400 counts per rotation.  This gives us a decimal representation of the percentage that the spindle has turned since we last checked*/
       /*2,400 counts per revolution on an 8 TPI leadscrew means a resolution of 0.000052 inches per encoder step, which is insane*/
@@ -258,16 +214,16 @@ void high_priority_loop(void * parameter){
       //last_rotation = rotation;
       calculateStepsToMoveFLOAT(counts_delta);
       //stepper->move(counts_delta);
-      step_drives_per_second++;
+      //step_drives_per_second++;
     }
     /*Debugging, just outputting the calculations per second*/
-    if(cur_timer - last_timer > 1000000){
+    //if(cur_timer - last_timer > 1000000){
       //Serial.println(calculations_per_second);
       //Serial.println(step_drives_per_second);
-      calculations_per_second = 0;
-      step_drives_per_second = 0;
-      last_timer = cur_timer;
-    }
+    //  calculations_per_second = 0;
+    //  step_drives_per_second = 0;
+    //  last_timer = cur_timer;
+    //}
 
     last_count = cur_count;
 
@@ -276,17 +232,15 @@ void high_priority_loop(void * parameter){
   }
 }
 
-long lastmillis = 0;
-
 void calculateStepsToMoveFLOAT(int encoder_counts){
 
   float current_feed_rate = 0.0;
-  if(run_mode == 0){
+  if(run_mode == FEED_MODE){
     current_feed_rate = float(feed_rate);
-  } else if(run_mode == 1){
-    current_feed_rate = tpiToThouPerRev(inch_TPIs[tpi_rate].toFloat());
-  } else if(run_mode == 2){
-    current_feed_rate = metricPitchToThouPerRev(metric_pitches[pitch].toFloat());
+  } else if(run_mode == TPI_MODE){
+    current_feed_rate = inch_thou_per_rev[tpi_current_selected];
+  } else if(run_mode == PITCH_MODE){
+    current_feed_rate = metric_thou_per_rev[metric_pitch_current_selected];
   } else{
     current_feed_rate = 0.0;
   }
@@ -296,41 +250,29 @@ void calculateStepsToMoveFLOAT(int encoder_counts){
     rotation_direction = -1;
   }
   encoder_counts = abs(encoder_counts);
-  float rotation_proportion = encoder_counts / ENCODER_COUNTS_FLOAT;
-  float related_rotation = rotation_proportion * (current_feed_rate / 1000.0)/LEADSCREW_ROTATIONS_PER_SPINDLE_ROTATION;
-//Serial.println(related_rotation,10);
-  float decimal_steps = related_rotation * ENCODER_COUNTS_FLOAT * (STEPPER_STEPS_PER_REV_FLOAT/ENCODER_COUNTS_FLOAT);
-//Serial.println(decimal_steps,10);
-  float current_carry_over = decimal_steps - (int)decimal_steps;
+
+  float rotation_proportion = encoder_counts / ENCODER_COUNTS_FULL_REV;
+  float total_thou_to_move = 0.0;
+  float final_steps = 0.0;
+
+  total_thou_to_move = current_feed_rate * rotation_proportion;
+
+  final_steps = total_thou_to_move / (LEADSCREW_THOU_PER_REV/STEPPER_STEPS_FULL_REV);
+
+  /*Need to multiply by the final drive ratio BEFORE calculating carryover*/
+  final_steps = final_steps * FINAL_DRIVE_RATIO;
+
+  float current_carry_over = abs(final_steps) - abs((int)final_steps);
  
 
   if(current_carry_over + running_steps_carryover > 1.0){
-    decimal_steps++;
+    final_steps++;
     running_steps_carryover = current_carry_over + running_steps_carryover - 1.0;
   } else{
     running_steps_carryover = running_steps_carryover + current_carry_over;
   }
-  moveStepperToPosition(decimal_steps*rotation_direction*FINAL_DRIVE_RATIO*UI_direction);
+  moveStepperToPosition(final_steps*rotation_direction*UI_direction);
 
-}
-
-float tpiToThouPerRev(float tpi){
-  
-  /*Calcualte the thou per rev for an imperial thread.  Do this by taking the leadscrew pitch (.125) and figuring out how many thou to move per rev*/
-  float tpi_to_thou = LEADSCREW_THOU_PER_REVOLUTION*(LEADSCREW_TPI_FLOAT / tpi);
-  //Serial.println(tpi_to_thou);
-  //Serial.println(inch_TPIs[tpi_rate].toFloat());
-  return tpi_to_thou;
-
-}
-
-float metricPitchToThouPerRev(float pitch){
-  
-  /*Calcualte the thou per rev for a metric thread.  Do this by converting the pitch to thou, then taking the leadscrew pitch (.125) and figuring out how many thou to move per rev*/
-  //Serial.println(pitch);
-  float thou_from_pitch = pitch * 39.3701;
-  //Serial.println(thou_from_pitch);
-  return thou_from_pitch;
 }
 
 void moveStepperToPosition(long counts){
@@ -338,15 +280,10 @@ void moveStepperToPosition(long counts){
   stepper->move(counts);
 }
 
-
-
 void lcdUpdate(){
 
-  last_display_refresh++;
-
-  if(last_display_refresh >= 10/DISPLAY_REFRESH_HZ){
-
-    last_display_refresh = 0;
+  if(millis() - display_millis > 1000/LCD_REFRESH_RATE){
+    display_millis = millis();
 
     String encoder_pos = String("E=" + String(String((int32_t)encoder.getCount())+"     S="+ String(total_steps_moved) + "          ").substring(0,20));
 
@@ -367,7 +304,7 @@ void lcdUpdate(){
     long rpm_delta = rpm_display_current_count - rpm_display_last_count;
     u_int64_t micros_since_last_update = display_current_update_time - display_last_updated_time;
     float seconds_since_last_update = micros_since_last_update/1000000.0;
-    float current_RPMs = rpm_delta/2400.0/seconds_since_last_update*60.0;
+    float current_RPMs = rpm_delta/ENCODER_COUNTS_FULL_REV/seconds_since_last_update*60.0;
     String RPMs_current = "RPMs = " + String(String(current_RPMs)+String("                    ")).substring(0,13);
     rpm_display_last_count = rpm_display_current_count;
     display_last_updated_time = display_current_update_time;
@@ -390,76 +327,94 @@ void lcdUpdate(){
       }
     }
   }
-
   String feed_string = "";
   /*fourth line*/
-  if(run_mode == 0){
-    feed_string = String("Feed: 0.") +String(String("000") + String(feed_rate)).substring(String(feed_rate).length(),String(String("000") + String(feed_rate)).length()) + String("         ");
-  } else if(run_mode == 1){
-    feed_string = String("TPI: ") + inch_TPIs[tpi_rate] + String("              ");
-  } else if(run_mode == 2){
-    feed_string = String("Pitch: ") + metric_pitches[pitch] + "         ";
+
+  String fwd_rev = String("FWD");
+  String on_off = String("ON ");
+
+  if(UI_direction == -1){
+    fwd_rev = String("REV");
+  }
+  if(UI_on_off == -1){
+    on_off = String("OFF");
+  }
+
+
+  if(run_mode == FEED_MODE){
+    feed_string = String("Feed: 0.") +String(String("000") + String(feed_rate)).substring(String(feed_rate).length(),String(String("000") + String(feed_rate)).length()) + String("  " + String(on_off) + String(" ") + fwd_rev);
+  } else if(run_mode == TPI_MODE){
+    feed_string = String("TPI: ") + inch_TPIs[tpi_current_selected] + String("   ") + String(on_off) + String("   " + fwd_rev + "  ");
+  } else if(run_mode == PITCH_MODE){
+    feed_string = String("Pitch: ") + metric_pitches[metric_pitch_current_selected] + "  " + String(on_off) + " " + fwd_rev;
   } else{
     //do nothing
   }
   
 
-   for(int i = 0; i < 20; i++){
+  for(int i = 0; i < 20; i++){
     if (feed_string.charAt(i) != current_LCD_line_4[i]){
       lcd.setCursor(i,3);
       lcd.print(feed_string[i]);
       current_LCD_line_4[i] = feed_string.charAt(i);
     }
-  } 
+  }
 }
 
 void buttonCheck(){
-  if(!digitalRead(FEED_INCREASE_BUTTON)){
-    if(feed_rate < 150){
-      feed_hold_check(FEED_INCREASE_BUTTON);
+  if(millis() - button_check_refresh_millis > 1000/BUTTON_REFRESH_RATE){
+    button_check_refresh_millis = millis();
+    if(!digitalRead(FEED_INCREASE_BUTTON)){
+        feed_hold_check(FEED_INCREASE_BUTTON);
+    } else{
+      feed_up_hold = 0;
     }
-  } else{
-    feed_up_hold = 0;
-  }
-  if(!digitalRead(FEED_DECREASE_BUTTON)){
-    if(feed_rate > 1){
-      feed_hold_check(FEED_DECREASE_BUTTON);
+    if(!digitalRead(FEED_DECREASE_BUTTON)){
+        feed_hold_check(FEED_DECREASE_BUTTON);
+    } else{
+      feed_down_hold = 0;
     }
-  } else{
-    feed_down_hold = 0;
-  }
-  if(!digitalRead(MODE_SELECT_BUTTON)){
-    run_mode_debounce++;
-    if(run_mode_debounce == 2){
-      if(run_mode == 2){
-        run_mode = 0;
+    if(!digitalRead(MODE_SELECT_BUTTON)){
+      run_mode_debounce++;
+      if(run_mode_debounce == 2){
+        if(run_mode == PITCH_MODE){
+          run_mode = FEED_MODE;
+        } else{
+          run_mode++;
+        }
+      }
+    } else{
+      run_mode_debounce = 0;
+    }
+    if(!digitalRead(DIRECTION_BUTTON)){
+      feed_direction_debounce++;
+      if(feed_direction_debounce == 2){
+        UI_direction = UI_direction * -1;
+      }
+    } else{
+      feed_direction_debounce = 0;
+    }
+    if(!digitalRead(ON_OFF_BUTTON)){
+        on_off_debounce++;
+        if(on_off_debounce == 2){
+          UI_on_off = UI_on_off * -1;
+        }
       } else{
-        run_mode++;
+        on_off_debounce = 0;
       }
     }
-  } else{
-    run_mode_debounce = 0;
   }
-  if(!digitalRead(DIRECTION_BUTTON)){
-    feed_direction_debounce++;
-    if(feed_direction_debounce == 2){
-      UI_direction = UI_direction * -1;
-    }
-  } else{
-    feed_direction_debounce = 0;
-  }
-}
 
 void feed_hold_check(int pin){
   if(pin == FEED_INCREASE_BUTTON){
     feed_up_hold++;
-    if(feed_up_hold == 1 || feed_up_hold > 10){
-      if(run_mode == FEED_MODE){
+    if(feed_up_hold == 1 || feed_up_hold > BUTTON_REFRESH_RATE){
+      if(run_mode == FEED_MODE && feed_rate < 150){
         feed_rate++;
-      } else if(run_mode == TPI_MODE && tpi_rate < 23){
-        tpi_rate++;
-      } else if(run_mode == PITCH_MODE && pitch < 20){
-        pitch++;
+      } else if(run_mode == TPI_MODE && tpi_current_selected < 23){
+        tpi_current_selected++;
+      } else if(run_mode == PITCH_MODE && metric_pitch_current_selected < 20){
+        metric_pitch_current_selected++;
       } else{
         //do nothing
       }
@@ -468,13 +423,13 @@ void feed_hold_check(int pin){
   }
   if(pin == FEED_DECREASE_BUTTON){
     feed_down_hold++;
-    if(feed_down_hold == 1 || feed_down_hold > 10){
-      if(run_mode == FEED_MODE){
+    if(feed_down_hold == 1 || feed_down_hold > BUTTON_REFRESH_RATE){
+      if(run_mode == FEED_MODE && feed_rate > 1){
         feed_rate--;
-      } else if(run_mode == TPI_MODE && tpi_rate > 0){
-        tpi_rate--;
-      } else if(run_mode == PITCH_MODE && pitch > 0){
-        pitch--;
+      } else if(run_mode == TPI_MODE && tpi_current_selected > 0){
+        tpi_current_selected--;
+      } else if(run_mode == PITCH_MODE && metric_pitch_current_selected > 0){
+        metric_pitch_current_selected--;
       } else{
         //do nothing
       }
@@ -482,75 +437,3 @@ void feed_hold_check(int pin){
   }
 }
 
-/*OLD THING*/
-/*
-void calculateStepsToMove(int encoder_counts){
-  //encoder pulses 2400 times per rev
-  //leadscrew moves .125" per rev
-  //each step moves the saddle .00005208 inches
-
-  //multiply everything by 1,000,000, that gives us 52 micro-inches per step
-
-  //if we do everything in microinches, we don't need to mess with floats maybe
-
-  //first, get the thou per rotation
-  //then, convert it to microinches
-
-  //find the number of millisteps so we can ceep track of fractional steps without float imprecision
-  int milli_steps = encoder_counts * 1000;
-
-  //1 thou per revolution = 1 thou*8
-
-  //distance per revolution
-
-  //2400 at 1:1 is .125
-  //2400 at X is 0.001
-
-  //if matched, then it works out to 125 thou per rotation
-
-  //2400 x RATIO = .125 * 2400
-  //2400 x .125 * RATIO(.125/.125) = 300
-  //2400 x .125 * (.001/.125) = 2.4 steps
-
-  float final_ratio = (feed_rate/125000.0);
-
-  long long milli_steps_needed = 2400000 * 125 * feed_rate*1000/125000*milli_steps;
-  int milli_steps_remainder = milli_steps_needed%1000;
-
-  //Serial.println(feed_rate);
-  //Serial.println(milli_steps);
-  //Serial.println(milli_steps_needed);
-  //Serial.println(milli_steps_remainder);
-
-  if(milli_steps_remainder != 0){
-    if(milli_steps_remainder + milli_steps_carryover > 1000){
-      milli_steps_needed = milli_steps_needed + 1000;
-      milli_steps_carryover = milli_steps_carryover + milli_steps_remainder - 1000;
-    } else{
-      milli_steps_carryover = milli_steps_carryover + milli_steps_remainder;
-    }
-  }
-
-
-
-
-  //2400 at 1 thou = (.001/8) / 2400
-
-  //long microinches_of_travel_needed = (feed_rate * 1000 * encoder_counts)/2400*LEADSCREW_TPI;
-
-  //int steps_from_travel_needed = microinches_of_travel_needed/52;
-
-  //Serial.println("encoder = " + encoder_counts);
-  //Serial.println("microinches needed = " + microinches_of_travel_needed);
-  //Serial.println("steps calculated = " + steps_from_travel_needed);
-
-  //next, figure out how many microinches we need to move
-
-  long steps_from_travel_needed = milli_steps_needed / 1000;
-
-  moveStepperToPosition(steps_from_travel_needed);
-
-  //delay(100);
-
-}
-*/
