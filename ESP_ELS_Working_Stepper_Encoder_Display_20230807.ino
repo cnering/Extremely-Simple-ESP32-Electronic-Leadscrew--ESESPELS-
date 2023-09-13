@@ -175,7 +175,7 @@ void setup(){
   xTaskCreatePinnedToCore(
     high_priority_loop, /* The realtime loop that calculates stepper pulses and reads the encoder.  It is on its own CPU core so it never gets delayed/blocked*/
     "Encoder and Stepper", /* Name of the task */
-    3000,  /* Stack size in words */
+    1000,  /* Stack size in words */
     NULL,  /* Task input parameter */
     0,  /* Priority of the task */
     &stepper_and_encoder_driver,  /* Task handle. */
@@ -185,7 +185,6 @@ void setup(){
 }
 
 void loop(){
-  
   //This all runs on CPU1
   /*UI updates - check the buttons and set the UI values*/
   buttonCheck();
@@ -203,7 +202,6 @@ void high_priority_loop(void * parameter){
     
     /*record current encoder counts to compare to previous counts to find distance travelled since last check*/
     int64_t cur_count = encoder.getCount();
-    //Serial.println("This task watermark: " + String(uxTaskGetStackHighWaterMark(NULL)) + " bytes");
     
 
     /*
@@ -320,9 +318,6 @@ void lcdUpdate(){
 
   /*The RPM and SFM parts update constantly, so we only want to refresh them on a schedule (otherwise they get all smeary)*/
   if(millis() - display_millis > 1000/LCD_REFRESH_RATE){
-
-    	
-    //Serial.println(ESP.getFreeHeap());
 
     /*first line PROD*/
     //First line displays the program and 

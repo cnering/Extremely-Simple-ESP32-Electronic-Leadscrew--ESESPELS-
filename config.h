@@ -3,9 +3,6 @@
 /*How many counts per full encoder revolution*/
 #define ENCODER_COUNTS_FULL_REV 2400.0
 
-/*Encoder final drive ratio, how many rotations does the encoder make for each full rotation of the spindle*/
-#define ENCODER_FINAL_DRIVE_RATIO 2.0
-
 /*How many steps per full servo revolution*/
 #define STEPPER_STEPS_FULL_REV 2400.0
 
@@ -14,6 +11,9 @@
 
 /*Any final drive calculations, like or a belt system or gear reduction*/
 #define FINAL_DRIVE_RATIO 4
+
+/*The encoder final drive calculations, like or a belt system or gear reduction*/
+#define ENCODER_FINAL_DRIVE_RATIO 2.0
 
 /*I don't know why you'd ever need a feed higher than 150 thou per rev, but if you did you could set it here*/
 #define MAX_FEED_RATE 150
