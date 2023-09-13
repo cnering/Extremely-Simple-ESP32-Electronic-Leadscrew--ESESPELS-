@@ -18,7 +18,7 @@ int lcdColumns = 20;
 int lcdRows = 4;
 
 /*To calculate RPMs, we need to store the previous encoder count and compare it to the current encoder count, and compare that to how much time has passed*/
-u_long rpm_display_last_count = 0;
+int64_t rpm_display_last_count = 0;
 u_int64_t display_last_updated_time = esp_timer_get_time();
 
 /*Store the last time the display was updated so we can run at the desired refresh rate*/
@@ -175,7 +175,7 @@ void setup(){
   xTaskCreatePinnedToCore(
     high_priority_loop, /* The realtime loop that calculates stepper pulses and reads the encoder.  It is on its own CPU core so it never gets delayed/blocked*/
     "Encoder and Stepper", /* Name of the task */
-    1000,  /* Stack size in words */
+    3000,  /* Stack size in words */
     NULL,  /* Task input parameter */
     0,  /* Priority of the task */
     &stepper_and_encoder_driver,  /* Task handle. */
@@ -185,6 +185,7 @@ void setup(){
 }
 
 void loop(){
+  
   //This all runs on CPU1
   /*UI updates - check the buttons and set the UI values*/
   buttonCheck();
@@ -202,6 +203,7 @@ void high_priority_loop(void * parameter){
     
     /*record current encoder counts to compare to previous counts to find distance travelled since last check*/
     int64_t cur_count = encoder.getCount();
+    //Serial.println("This task watermark: " + String(uxTaskGetStackHighWaterMark(NULL)) + " bytes");
     
 
     /*
@@ -275,7 +277,7 @@ void calculateStepsToMove(int encoder_counts){
 
   //Calculating the proportion of a full revolution of the encoder sinced we last checked.  Since my servo has the same number of
   //microsteps as my encoder it's 1:1, however changing the defines at the top allows you to use any encoder/microstep combo
-  float rotation_proportion = encoder_counts / ENCODER_COUNTS_FULL_REV;
+  float rotation_proportion = encoder_counts / ENCODER_COUNTS_FULL_REV / ENCODER_FINAL_DRIVE_RATIO;
   float total_thou_to_move = 0.0;
   float final_steps = 0.0;
 
@@ -319,10 +321,13 @@ void lcdUpdate(){
   /*The RPM and SFM parts update constantly, so we only want to refresh them on a schedule (otherwise they get all smeary)*/
   if(millis() - display_millis > 1000/LCD_REFRESH_RATE){
 
+    	
+    //Serial.println(ESP.getFreeHeap());
+
     /*first line PROD*/
     //First line displays the program and 
     //Version and name, only need to run a single time
-    String version = "ESESPELS v.10       ";
+    String version = "ESESPELS v.80       ";
     if(display_millis == 0){
       lcdLineUpdate(0, version, current_LCD_line_1);
     }
@@ -372,7 +377,7 @@ void lcdUpdate(){
     float seconds_since_last_update = micros_since_last_update/1000000.0;
 
     //The actual RPM calculation.  I measured with an RPM detection device and it was within 1%
-    float current_RPMs = rpm_delta/ENCODER_COUNTS_FULL_REV/seconds_since_last_update*60.0;
+    float current_RPMs = rpm_delta/ENCODER_COUNTS_FULL_REV/ENCODER_FINAL_DRIVE_RATIO/seconds_since_last_update*60.0;
     String RPMs_current = "RPMs = " + String(String(current_RPMs)+String("                    ")).substring(0,13);
     rpm_display_last_count = rpm_display_current_count;
     display_last_updated_time = display_current_update_time;

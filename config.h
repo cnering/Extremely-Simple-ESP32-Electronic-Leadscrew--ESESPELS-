@@ -3,6 +3,9 @@
 /*How many counts per full encoder revolution*/
 #define ENCODER_COUNTS_FULL_REV 2400.0
 
+/*Encoder final drive ratio, how many rotations does the encoder make for each full rotation of the spindle*/
+#define ENCODER_FINAL_DRIVE_RATIO 2.0
+
 /*How many steps per full servo revolution*/
 #define STEPPER_STEPS_FULL_REV 2400.0
 
