@@ -13,7 +13,7 @@
 #define FINAL_DRIVE_RATIO 4
 
 /*The encoder final drive calculations, like or a belt system or gear reduction*/
-#define ENCODER_FINAL_DRIVE_RATIO 2.0
+#define ENCODER_FINAL_DRIVE_RATIO 1.0
 
 /*I don't know why you'd ever need a feed higher than 150 thou per rev, but if you did you could set it here*/
 #define MAX_FEED_RATE 150
@@ -49,5 +49,5 @@ of the ESP32, means that I'm rarely ever sending more than a single step at a ti
 /*===============================================*/
 
 /*!!!ENCODER DEFINES!!!*/
-#define ENCODER_PIN_A 33
-#define ENCODER_PIN_B 32
+#define ENCODER_PIN_A 34
+#define ENCODER_PIN_B 35

@@ -1,9 +1,18 @@
+#ifdef CORE_DEBUG_LEVEL
+#undef CORE_DEBUG_LEVEL
+#endif
+
+#define CORE_DEBUG_LEVEL 3
+#define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
+
+
 #include <LiquidCrystal_I2C.h>
 #include <ESP32Encoder.h>
 #include "FastAccelStepper.h"
 #include <Arduino.h>
 #include "config.h"
 #include "tables.h"
+#include <esp32-hal-log.h>
 
 
 /*!!!MODE DEFINES!!!*/
