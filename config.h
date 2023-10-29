@@ -1,10 +1,10 @@
 /*!!!MAGIC NUMBER DEFINITIONS!!!*/
 
 /*How many counts per full encoder revolution*/
-#define ENCODER_COUNTS_FULL_REV 2400.0
+#define ENCODER_COUNTS_FULL_REV 4096.0
 
 /*How many steps per full servo revolution*/
-#define STEPPER_STEPS_FULL_REV 2400.0
+#define STEPPER_STEPS_FULL_REV 4096.0
 
 /*Thou per rev for your leadscrew*/
 #define LEADSCREW_THOU_PER_REV 125.0
@@ -13,7 +13,7 @@
 #define FINAL_DRIVE_RATIO 4
 
 /*The encoder final drive calculations, like or a belt system or gear reduction*/
-#define ENCODER_FINAL_DRIVE_RATIO 1.0
+#define ENCODER_FINAL_DRIVE_RATIO 2.666666666666666666
 
 /*I don't know why you'd ever need a feed higher than 150 thou per rev, but if you did you could set it here*/
 #define MAX_FEED_RATE 150
