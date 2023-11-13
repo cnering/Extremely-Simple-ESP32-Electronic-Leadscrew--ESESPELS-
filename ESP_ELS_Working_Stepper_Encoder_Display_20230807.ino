@@ -102,6 +102,7 @@ FastAccelStepper *stepper = NULL;
 
 /*!!!ENCODER!!!*/
 ESP32Encoder encoder;
+u_int64_t last_timer = 0;
 
 /*===============================================*/
 
@@ -205,36 +206,104 @@ void loop(){
 void high_priority_loop(void * parameter){
   for(;;) {
     u_int64_t cur_timer = esp_timer_get_time();
-    
-    //debugging, figuring out how many calculations per second can be achieved, for performance reasons this should not run in prod
-    //calculations_per_second++;
-    
-    /*record current encoder counts to compare to previous counts to find distance travelled since last check*/
-    int64_t cur_count = encoder.getCount();
-    
+    int microseconds = cur_timer - last_timer;
+    /*SPEED_MODE operates on a timer and updates the speed some number of times a second, whereas STEP_MODE updates as often as possible*/
+    if (microseconds > SPEED_MODE_REFRESH_MICROSECONDS || STEPS_MODE == 1){
+      //debugging, figuring out how many calculations per second can be achieved, for performance reasons this should not run in prod
+      //calculations_per_second++;
+      
+      /*record current encoder counts to compare to previous counts to find distance travelled since last check*/
+      int64_t cur_count = encoder.getCount();
+      
 
-    /*
-    Does not handle rollovers, however.  Encoder.getcount() returns a 64-bit int, meaning that it can count up to
-    9,223,372,036,854,775,807 before rolling over.  At 5,000 RPMs, and 2,400 counts/rev, that means that the encoder
-    can run for approximately 1.4 million years without ever overflowing.
-    */
-    int counts_delta = cur_count - last_count;
-    
-    /*if we haven't moved, or the UI has commanded the servo to be OFF, don't do anything, otherwise drive to new location*/
-    if(counts_delta != 0 && UI_on_off == 1){
-      calculateStepsToMove(counts_delta);
-    }
-    /*Debugging, just outputting the calculations per second*/
-    /*if(cur_timer - last_timer > 1000000){
-      Serial.println(calculations_per_second);
-      Serial.println(step_drives_per_second);
-      calculations_per_second = 0;
-      step_drives_per_second = 0;
+      /*
+      Does not handle rollovers, however.  Encoder.getcount() returns a 64-bit int, meaning that it can count up to
+      9,223,372,036,854,775,807 before rolling over.  At 5,000 RPMs, and 2,400 counts/rev, that means that the encoder
+      can run for approximately 1.4 million years without ever overflowing.
+      */
+      int counts_delta = cur_count - last_count;
+      
+      
+      //Only run either STEPS_MODE or SPEED_MODE
+      if(STEPS_MODE){
+        /*if we haven't moved, or the UI has commanded the servo to be OFF, don't do anything, otherwise drive to new location*/
+        if(counts_delta != 0 && UI_on_off == 1){
+          calculateStepsToMove(counts_delta);
+        }
+      } else{
+        if(counts_delta != 0 && UI_on_off == 1){
+          calculateSpeedToMove(counts_delta, microseconds);
+        }
+        else{
+          //If we haven't had any encoder movement, then accelerate the stepper to a stop
+          stepper->moveByAcceleration(-10000,false);
+        }
+      }
+      /*Debugging, just outputting the calculations per second*/
+      /*if(cur_timer - last_timer > 1000000){
+        Serial.println(calculations_per_second);
+        Serial.println(step_drives_per_second);
+        calculations_per_second = 0;
+        step_drives_per_second = 0;
+        last_timer = cur_timer;
+      }*/
+
+      last_count = cur_count;
       last_timer = cur_timer;
-    }*/
-
-    last_count = cur_count;
+    }
   }
+}
+void calculateSpeedToMove(int encoder_counts, u_int64_t microseconds){
+
+  /*The basic idea here is to calculate the speed (in rotations per second) that the spindle is moving, and then
+    use this speed to tell the stepper what speed it should move.  Instead of moving by steps, we instead update the 
+    speed at which the stepper should be moving each time.  This way, instead of sending huge bursts of steps to the
+    stepper, we're only sending small speed updates.  This seems to help with low-speed jitter, and appears to be
+    plenty accurate*/
+
+  float current_feed_rate = 0.0;
+
+  //Set the current feed rate to be in thou/rev for any mode we're in
+
+  if(run_mode == FEED_MODE){
+    current_feed_rate = float(feed_rate);
+  } else if(run_mode == TPI_MODE){
+    current_feed_rate = inch_thou_per_rev[tpi_current_selected];
+  } else if(run_mode == PITCH_MODE){
+    current_feed_rate = metric_thou_per_rev[metric_pitch_current_selected];
+  } else{
+    current_feed_rate = 0.0;
+  }
+
+  int rotation_direction = 1;
+  if(encoder_counts < 0){
+    rotation_direction = -1;
+  }
+
+  encoder_counts = abs(encoder_counts);
+
+  float rotation_proportion = encoder_counts / ENCODER_COUNTS_FULL_REV / ENCODER_FINAL_DRIVE_RATIO;
+  
+  /*this is the speed in rotations per second of the spindle.  We want to convert this into rotations per second, so we divide the microseconds by 1 million*/
+  float current_rotations_per_second = rotation_proportion/(microseconds/1000000.0);
+
+  /*Calculate the feed rate (in thou per second).  To do this, take the current spindle rotations per second, and multiply this by the feed rate in thou.  This gives the total number of thou 
+    that the leadscrew should drive the carraige in one second at the current spindle speed*/
+  float thou_per_second_feed = current_rotations_per_second * current_feed_rate;
+  
+  //now we need to turn that into uS per step
+  //first, calculate exactly how many steps that feed rate will be for 1 second, making sure to
+  //correct for the leadscrew having a reduction
+  float stepper_steps_to_move_in_one_second = STEPPER_STEPS_FULL_REV*(thou_per_second_feed/LEADSCREW_THOU_PER_REV);
+
+  /*Now, take that number and figure out how many microseconds per step that is.  For instance, if your spindle is spinning at 1 RPS,
+    and you want to feed at 125 thou per rev, then you need to command a full revolution in 1 second.  This is STEPPER_STEPS_PER_REV (for example, 500)
+    steps, so you need to divide 1,000,000 (microseconds in a second) buy that value, and then you'll get the microseconds_per_step which is 1,000,000/500 = 2,000 microseconds per step*/
+  float usec_per_step = 1000000.0/stepper_steps_to_move_in_one_second;
+
+  /*Set the stepper usec_per_step to this value, corrected for your final drive ratio*/
+  stepper->setSpeedInUs(usec_per_step/FINAL_DRIVE_RATIO_FLOAT);
+  stepper->moveByAcceleration(STEPPER_ACCELERATION);
 }
 
 void calculateStepsToMove(int encoder_counts){
@@ -331,7 +400,7 @@ void lcdUpdate(){
     /*first line PROD*/
     //First line displays the program and 
     //Version and name, only need to run a single time
-    String version = "ESESPELS v.80       ";
+    String version = "ESESPELS v.90       ";
     if(display_millis == 0){
       lcdLineUpdate(0, version, current_LCD_line_1);
     }

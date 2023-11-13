@@ -1,3 +1,15 @@
+/*!!!Running Mode!!!*/
+/*I have two modes, STEPS_MODE which counts the encoder pulses as quickly as possible
+  and then calculates the number of STEPS it has to move, and SPEED_MODE which instead
+  calculates the current rotational speed of the spindle and calculates the microseconds per step
+  for that speed.  STEP_MODE is nominally more accurate, but it seems like it causes some vibration/judder at lower
+  speeds.  SPEED_MODE is less accurate (it can't handle extremely slow rotations) but seems to make the machine
+  much happier*/
+#define STEPS_MODE 0
+
+#define SPEED_MODE_REFRESH_MICROSECONDS 10000
+
+
 /*!!!MAGIC NUMBER DEFINITIONS!!!*/
 
 /*How many counts per full encoder revolution*/
@@ -11,6 +23,7 @@
 
 /*Any final drive calculations, like or a belt system or gear reduction*/
 #define FINAL_DRIVE_RATIO 4
+#define FINAL_DRIVE_RATIO_FLOAT 4.0
 
 /*The encoder final drive calculations, like or a belt system or gear reduction*/
 #define ENCODER_FINAL_DRIVE_RATIO 2.666666666666666666
