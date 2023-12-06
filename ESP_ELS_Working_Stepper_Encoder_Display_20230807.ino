@@ -303,7 +303,7 @@ void calculateSpeedToMove(int encoder_counts, u_int64_t microseconds){
 
   /*Set the stepper usec_per_step to this value, corrected for your final drive ratio*/
   stepper->setSpeedInUs(usec_per_step/FINAL_DRIVE_RATIO_FLOAT);
-  stepper->moveByAcceleration(STEPPER_ACCELERATION);
+  stepper->moveByAcceleration(STEPPER_ACCELERATION*UI_direction);
 }
 
 void calculateStepsToMove(int encoder_counts){
