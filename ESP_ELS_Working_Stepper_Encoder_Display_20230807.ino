@@ -282,6 +282,7 @@ void calculateSpeedToMove(int encoder_counts, u_int64_t microseconds){
 
   encoder_counts = abs(encoder_counts);
 
+
   float rotation_proportion = encoder_counts / ENCODER_COUNTS_FULL_REV / ENCODER_FINAL_DRIVE_RATIO;
   
   /*this is the speed in rotations per second of the spindle.  We want to convert this into rotations per second, so we divide the microseconds by 1 million*/
@@ -303,7 +304,7 @@ void calculateSpeedToMove(int encoder_counts, u_int64_t microseconds){
 
   /*Set the stepper usec_per_step to this value, corrected for your final drive ratio*/
   stepper->setSpeedInUs(usec_per_step/FINAL_DRIVE_RATIO_FLOAT);
-  stepper->moveByAcceleration(STEPPER_ACCELERATION*UI_direction);
+  stepper->moveByAcceleration(STEPPER_ACCELERATION*UI_direction*rotation_direction);
 }
 
 void calculateStepsToMove(int encoder_counts){
@@ -348,7 +349,8 @@ void calculateStepsToMove(int encoder_counts){
   }
 
   /*Since we've determined the direction, we can use the absolute value now to make our other calculations less complicated*/
-  encoder_counts = abs(encoder_counts);
+  /*20231205 - actually this was dumb, we want to be aware of the current rotation direction to allow fwd/reverse threading, so don't do this*/
+  /*encoder_counts = abs(encoder_counts);*/
 
 
   //Calculating the proportion of a full revolution of the encoder sinced we last checked.  Since my servo has the same number of
@@ -400,7 +402,7 @@ void lcdUpdate(){
     /*first line PROD*/
     //First line displays the program and 
     //Version and name, only need to run a single time
-    String version = "ESESPELS v.90       ";
+    String version = "ESESPELS v.91       ";
     if(display_millis == 0){
       lcdLineUpdate(0, version, current_LCD_line_1);
     }
