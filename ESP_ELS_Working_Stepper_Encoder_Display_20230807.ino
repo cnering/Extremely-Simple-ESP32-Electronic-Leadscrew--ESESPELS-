@@ -20,6 +20,16 @@
 #define TPI_MODE 1
 #define PITCH_MODE 2
 
+/*!!!Running Mode!!!*/
+/*I have two modes, STEPS_MODE which counts the encoder pulses as quickly as possible
+  and then calculates the number of STEPS it has to move, and SPEED_MODE which instead
+  calculates the current rotational speed of the spindle and calculates the microseconds per step
+  for that speed.  STEP_MODE is nominally more accurate, but it seems like it causes some vibration/judder at lower
+  speeds.  SPEED_MODE is less accurate (it can't handle extremely slow rotations) but seems to make the machine
+  much happier*/
+int steps_mode = 0;
+int steps_hold = 0;
+
 /*!!!UI GLOBAL VARIABLES!!!*/
 
 // set the LCD number of columns and rows
@@ -53,6 +63,7 @@ char current_LCD_line_4[20];
 
 /*global variables for current feed positions and rate.  Want to set the defaults to the slowest feed in case you start with it engaged and then run at 2000 RPMs or something*/
 /*The current scheme lets you do down to 1 thou per rev, if I can't imagine why you'd ever need less than that*/
+/*2023-12-24 I can now imagine why you'd need less than that!  For parting it can be nice to go down even lower than 1 thou per rev, so I'm changing this to a float*/
 int feed_rate = 1;
 int tpi_current_selected = 0;
 int metric_pitch_current_selected = 0;
@@ -208,7 +219,7 @@ void high_priority_loop(void * parameter){
     u_int64_t cur_timer = esp_timer_get_time();
     int microseconds = cur_timer - last_timer;
     /*SPEED_MODE operates on a timer and updates the speed some number of times a second, whereas STEP_MODE updates as often as possible*/
-    if (microseconds > SPEED_MODE_REFRESH_MICROSECONDS || STEPS_MODE == 1){
+    if (microseconds > SPEED_MODE_REFRESH_MICROSECONDS || steps_mode == 1){
       //debugging, figuring out how many calculations per second can be achieved, for performance reasons this should not run in prod
       //calculations_per_second++;
       
@@ -225,7 +236,7 @@ void high_priority_loop(void * parameter){
       
       
       //Only run either STEPS_MODE or SPEED_MODE
-      if(STEPS_MODE){
+      if(steps_mode){
         /*if we haven't moved, or the UI has commanded the servo to be OFF, don't do anything, otherwise drive to new location*/
         if(counts_delta != 0 && UI_on_off == 1){
           calculateStepsToMove(counts_delta);
@@ -402,7 +413,7 @@ void lcdUpdate(){
     /*first line PROD*/
     //First line displays the program and 
     //Version and name, only need to run a single time
-    String version = "ESESPELS v.91       ";
+    String version = "ESESPELS v.91    SPD";
     if(display_millis == 0){
       lcdLineUpdate(0, version, current_LCD_line_1);
     }
@@ -524,6 +535,21 @@ void buttonCheck(){
       feed_down_hold = 0;
     }
     if(!digitalRead(MODE_SELECT_BUTTON)){
+      steps_hold++;
+      /*Hold mode for 3 seconds to change from STEPS to SPEED mode*/
+      if(steps_hold > BUTTON_REFRESH_RATE*3){
+        if(steps_mode == 0){
+          steps_mode = 1;
+          String version = "ESESPELS v.91    STP";
+          lcdLineUpdate(0, version, current_LCD_line_1);
+          steps_hold=0;
+        } else{
+          steps_mode = 0;
+          String version = "ESESPELS v.91    SPD";
+          lcdLineUpdate(0, version, current_LCD_line_1);
+          steps_hold=0;
+        }
+      }
       run_mode_debounce++;
       if(run_mode_debounce == 2){
         if(run_mode == PITCH_MODE){
@@ -533,6 +559,7 @@ void buttonCheck(){
         }
       }
     } else{
+      steps_hold = 0;
       run_mode_debounce = 0;
     }
     if(!digitalRead(DIRECTION_BUTTON)){
