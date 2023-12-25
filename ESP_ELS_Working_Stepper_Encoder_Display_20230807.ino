@@ -64,7 +64,7 @@ char current_LCD_line_4[20];
 /*global variables for current feed positions and rate.  Want to set the defaults to the slowest feed in case you start with it engaged and then run at 2000 RPMs or something*/
 /*The current scheme lets you do down to 1 thou per rev, if I can't imagine why you'd ever need less than that*/
 /*2023-12-24 I can now imagine why you'd need less than that!  For parting it can be nice to go down even lower than 1 thou per rev, so I'm changing this to a float*/
-int feed_rate = 1;
+float feed_rate = 1;
 int tpi_current_selected = 0;
 int metric_pitch_current_selected = 0;
 
@@ -277,7 +277,7 @@ void calculateSpeedToMove(int encoder_counts, u_int64_t microseconds){
   //Set the current feed rate to be in thou/rev for any mode we're in
 
   if(run_mode == FEED_MODE){
-    current_feed_rate = float(feed_rate);
+    current_feed_rate = feed_rate;
   } else if(run_mode == TPI_MODE){
     current_feed_rate = inch_thou_per_rev[tpi_current_selected];
   } else if(run_mode == PITCH_MODE){
@@ -344,7 +344,7 @@ void calculateStepsToMove(int encoder_counts){
   //Set the current feed rate to be in thou/rev for any mode we're in
 
   if(run_mode == FEED_MODE){
-    current_feed_rate = float(feed_rate);
+    current_feed_rate = feed_rate;
   } else if(run_mode == TPI_MODE){
     current_feed_rate = inch_thou_per_rev[tpi_current_selected];
   } else if(run_mode == PITCH_MODE){
@@ -493,7 +493,13 @@ void lcdUpdate(){
 
 
   if(run_mode == FEED_MODE){
-    feed_string = String("Feed: 0.") +String(String("000") + String(feed_rate)).substring(String(feed_rate).length(),String(String("000") + String(feed_rate)).length()) + String("  " + String(on_off) + String(" ") + fwd_rev);
+    /*To deal with the display of sub-thou feed oer revs*/
+    int feed_rate_int = int(feed_rate);
+    if(feed_rate >= 1){
+      feed_string = String("Feed: 0.") +String(String("000") + String(feed_rate_int)).substring(String(feed_rate_int).length(),String(String("000") + String(feed_rate_int)).length()) + String("  " + String(on_off) + String(" ") + fwd_rev);
+    } else{
+      feed_string = String("Feed: 0.000") + String(String(feed_rate_int*10))+ String(" " + String(on_off) + String(" ") + fwd_rev);
+    }
   } else if(run_mode == TPI_MODE){
     feed_string = String("TPI: ") + inch_TPIs[tpi_current_selected] + String("    ") + String(on_off) + String(" " + fwd_rev + "  ");
   } else if(run_mode == PITCH_MODE){
@@ -587,7 +593,11 @@ void feed_hold_check(int pin){
     feed_up_hold++;
     if(feed_up_hold == 1 || feed_up_hold > BUTTON_REFRESH_RATE){
       if(run_mode == FEED_MODE && feed_rate < MAX_FEED_RATE){
-        feed_rate++;
+        if (feed_rate >= 1){
+          feed_rate++;
+        } else{
+          feed_rate = feed_rate + FRACTIONAL_FEED;
+        }
       } else if(run_mode == TPI_MODE && tpi_current_selected > 0){
         tpi_current_selected--;
       } else if(run_mode == PITCH_MODE && metric_pitch_current_selected < sizeof(metric_pitches)/sizeof(metric_pitches[0]) - 1){
@@ -601,8 +611,13 @@ void feed_hold_check(int pin){
   if(pin == FEED_DECREASE_BUTTON){
     feed_down_hold++;
     if(feed_down_hold == 1 || feed_down_hold > BUTTON_REFRESH_RATE){
-      if(run_mode == FEED_MODE && feed_rate > 1){
-        feed_rate--;
+      if(run_mode == FEED_MODE && feed_rate >= 0.1){
+        if(feed_rate > 1){
+          feed_rate--;
+        } else{
+          feed_rate = feed_rate - FRACTIONAL_FEED;
+        }
+        
       } else if(run_mode == TPI_MODE && tpi_current_selected < sizeof(inch_TPIs)/sizeof(inch_TPIs[0]) - 1){
         tpi_current_selected++;
       } else if(run_mode == PITCH_MODE && metric_pitch_current_selected > 0){

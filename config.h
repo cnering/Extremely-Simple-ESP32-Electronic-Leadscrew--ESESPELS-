@@ -22,6 +22,10 @@
 /*I don't know why you'd ever need a feed higher than 150 thou per rev, but if you did you could set it here*/
 #define MAX_FEED_RATE 150
 
+/*The amount you want the fractional-thou feed rates to count up and down*/
+
+#define FRACTIONAL_FEED 0.1
+
 /*===============================================*/
 
 /*!!!UI REFRESH RATES IN HZ!!!*/
