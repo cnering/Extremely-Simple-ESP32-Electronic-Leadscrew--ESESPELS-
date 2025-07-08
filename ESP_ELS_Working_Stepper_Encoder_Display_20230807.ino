@@ -27,8 +27,10 @@
   for that speed.  STEP_MODE is nominally more accurate, but it seems like it causes some vibration/judder at lower
   speeds.  SPEED_MODE is less accurate (it can't handle extremely slow rotations) but seems to make the machine
   much happier*/
-int steps_mode = 0;
+int steps_mode = 1;
 int steps_hold = 0;
+
+int zero_speed_counter = 0;
 
 /*!!!UI GLOBAL VARIABLES!!!*/
 
@@ -242,12 +244,17 @@ void high_priority_loop(void * parameter){
           calculateStepsToMove(counts_delta);
         }
       } else{
-        if(counts_delta != 0 && UI_on_off == 1){
+        if(counts_delta != 0 && UI_on_off == 1){  
+          /*any movement should reset the zero speed counter*/
+          zero_speed_counter = 0;
           calculateSpeedToMove(counts_delta, microseconds);
         }
         else{
-          //If we haven't had any encoder movement, then accelerate the stepper to a stop
-          stepper->moveByAcceleration(-10000,false);
+          //If we haven't had any encoder movement, we need to start seeing if the lathe is truly stopped.  If so, then accelerate the stepper to a stop
+          zero_speed_counter++;
+          if(zero_speed_counter > ZERO_SPEEDS_TO_STOP){
+            stepper->moveByAcceleration(-10000,false);
+          }
         }
       }
       /*Debugging, just outputting the calculations per second*/
@@ -320,6 +327,7 @@ void calculateSpeedToMove(int encoder_counts, u_int64_t microseconds){
 
 void calculateStepsToMove(int encoder_counts){
 
+
   /*
   This is the big one, where we calculate the number of steps to move based on the
   delta of encoder counts since we last checked.  We first need to check what mode we're in (feed vs pitch/TPI)
@@ -339,6 +347,15 @@ void calculateStepsToMove(int encoder_counts){
     it's not enough to matter.  Furthermore, while floats do have some inbuilt inaccuracy, the high number of counts per rev
     and microsteps means that these inaccuracies are in the microinches
   */
+
+    /*Note, this is distinct from the UI variable, this is simply making sure the servo turns in lock step with the spindle direction*/
+  int rotation_direction = 1;
+  if(encoder_counts < 0){
+    rotation_direction = -1;
+  }
+
+  encoder_counts = abs(encoder_counts);
+
   float current_feed_rate = 0.0;
 
   //Set the current feed rate to be in thou/rev for any mode we're in
@@ -353,11 +370,6 @@ void calculateStepsToMove(int encoder_counts){
     current_feed_rate = 0.0;
   }
 
-  /*Note, this is distinct from the UI variable, this is simply making sure the servo turns in lock step with the spindle direction*/
-  int rotation_direction = 1;
-  if(encoder_counts < 0){
-    rotation_direction = -1;
-  }
 
   /*Since we've determined the direction, we can use the absolute value now to make our other calculations less complicated*/
   /*20231205 - actually this was dumb, we want to be aware of the current rotation direction to allow fwd/reverse threading, so don't do this*/
@@ -413,7 +425,7 @@ void lcdUpdate(){
     /*first line PROD*/
     //First line displays the program and 
     //Version and name, only need to run a single time
-    String version = "ESESPELS v.91    SPD";
+    String version = "ESESPELS v.91    STP";
     if(display_millis == 0){
       lcdLineUpdate(0, version, current_LCD_line_1);
     }
@@ -547,11 +559,15 @@ void buttonCheck(){
         if(steps_mode == 0){
           steps_mode = 1;
           String version = "ESESPELS v.91    STP";
+          /*reset everything to default/zero when we switch modes*/
+          stepper->setAcceleration(STEPPER_ACCELERATION);
+          encoder.setCount(0);
           lcdLineUpdate(0, version, current_LCD_line_1);
           steps_hold=0;
         } else{
           steps_mode = 0;
           String version = "ESESPELS v.91    SPD";
+          encoder.setCount(0);
           lcdLineUpdate(0, version, current_LCD_line_1);
           steps_hold=0;
         }

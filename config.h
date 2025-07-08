@@ -1,4 +1,4 @@
-#define SPEED_MODE_REFRESH_MICROSECONDS 10000
+#define SPEED_MODE_REFRESH_MICROSECONDS 100000
 
 
 /*!!!MAGIC NUMBER DEFINITIONS!!!*/
@@ -7,7 +7,7 @@
 #define ENCODER_COUNTS_FULL_REV 4096.0
 
 /*How many steps per full servo revolution*/
-#define STEPPER_STEPS_FULL_REV 4096.0
+#define STEPPER_STEPS_FULL_REV 8192.0
 
 /*Thou per rev for your leadscrew*/
 #define LEADSCREW_THOU_PER_REV 125.0
@@ -25,6 +25,10 @@
 /*The amount you want the fractional-thou feed rates to count up and down*/
 
 #define FRACTIONAL_FEED 0.1
+
+/*The number of zero-speed ticks to set speed to zero in SPEED mode*/
+
+#define ZERO_SPEEDS_TO_STOP 100
 
 /*===============================================*/
 
