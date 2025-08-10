@@ -30,10 +30,17 @@
 
 #define ZERO_SPEEDS_TO_STOP 100
 
+/*Max number of inches on the SFM display*/
+
+#define MAX_INCH_FOR_SFM 6
+
+/*Samples to smooth out noisy ADC readings*/
+#define NUM_ADC_SAMPLES 10
+
 /*===============================================*/
 
 /*!!!UI REFRESH RATES IN HZ!!!*/
-#define LCD_REFRESH_RATE 1
+#define LCD_REFRESH_RATE 30
 #define BUTTON_REFRESH_RATE 30
 
 /*===============================================*/
@@ -45,13 +52,13 @@
 #define FEED_DECREASE_BUTTON 5
 #define MODE_SELECT_BUTTON 17
 #define DIRECTION_BUTTON 16
-#define ON_OFF_BUTTON 26
+#define ON_OFF_BUTTON 0
 
 /*===============================================*/
 
 /*!!!STEPPER DRIVER DEFINES!!!*/
 #define STEPPER_DIRECTION_PIN 18
-#define STEPPER_ENABLE_PIN 35
+#define STEPPER_ENABLE_PIN 21
 #define STEPPER_STEP_PIN 19
 
 /*Steps per second squared.  For my servo, I want it to accelerate essentially instantly.  The way the program works, and the speed
@@ -61,5 +68,16 @@ of the ESP32, means that I'm rarely ever sending more than a single step at a ti
 /*===============================================*/
 
 /*!!!ENCODER DEFINES!!!*/
-#define ENCODER_PIN_A 34
-#define ENCODER_PIN_B 35
+#define ENCODER_PIN_A 2
+#define ENCODER_PIN_B 15
+
+/*===============================================*/
+/*!!!OLED PIN DEFINES!!!*/
+
+#define OLED_SDA 21
+#define OLED_SCL 22
+
+/*===============================================*/
+/*!!!SFM POT PIN DEFINES!!!*/
+
+#define SFM_POT_INPUT 36

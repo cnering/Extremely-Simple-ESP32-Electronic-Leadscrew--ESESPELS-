@@ -5,14 +5,14 @@
 #define CORE_DEBUG_LEVEL 3
 #define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
 
-
-#include <LiquidCrystal_I2C.h>
 #include <ESP32Encoder.h>
 #include "FastAccelStepper.h"
 #include <Arduino.h>
 #include "config.h"
 #include "tables.h"
 #include <esp32-hal-log.h>
+#include <Wire.h>
+#include <U8g2lib.h>
 
 
 /*!!!MODE DEFINES!!!*/
@@ -46,7 +46,9 @@ u_int64_t display_last_updated_time = esp_timer_get_time();
 unsigned long display_millis = 0;
 
 
-LiquidCrystal_I2C lcd(0x27, lcdColumns, lcdRows);
+U8G2_SSD1309_128X64_NONAME2_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
+
+
 
 /*Defining the char arrays that will be popualted/compared against for the LCD*/
 char current_LCD_line_1[20];
@@ -127,6 +129,13 @@ long last_count = 0;
 
 /*===============================================*/
 
+/*ADC potentiometer readings*/
+int readings[NUM_ADC_SAMPLES];   // circular buffer of the last N readings
+int readIndex = 0;           // current index in the buffer
+long total    = 0;           // running sum of readings
+float averageRaw = 0;          // filtered ADC value
+
+
 /*!!!DEBUGGING VARIABLES!!!*/
 
 
@@ -188,9 +197,16 @@ void setup(){
 
   /*!!!LCD!!!*/
   // initialize LCD
-  lcd.init();
+  //lcd.init();
   // turn on LCD backlight                      
-  lcd.backlight();
+  //lcd.backlight();
+
+  // I²C on ESP32 DevKit1 default pins
+  Wire.begin(/* SDA=*/ OLED_SDA, /* SCL=*/ OLED_SCL);
+  // bump I2C up to 400 kHz for faster transfers
+  Wire.setClock(400000UL);
+
+  u8g2.begin();
 
 
 
@@ -213,7 +229,7 @@ void loop(){
   buttonCheck();
   
   /*Update the display, including calculating things like RPM, thread pitch, feed rate, etc*/
-  lcdUpdate();
+  oledUpdate();
 }
 
 void high_priority_loop(void * parameter){
@@ -417,7 +433,20 @@ void moveStepperToPosition(long counts){
   stepper->move(counts);
 }
 
-void lcdUpdate(){
+void oledUpdate(){
+
+  /*u8g2.clearBuffer();
+  int rnd = random(0, 1000);
+  char buf[5];
+  snprintf(buf, sizeof(buf), "%03d", rnd);
+
+  // choose a big font so it's easy to see
+  u8g2.setFont(u8g2_font_ncenB24_tr);
+  // roughly centered vertically
+  u8g2.drawStr(0, 40, buf);
+  u8g2.sendBuffer();
+
+  return;*/
 
   /*The RPM and SFM parts update constantly, so we only want to refresh them on a schedule (otherwise they get all smeary)*/
   if(millis() - display_millis > 1000/LCD_REFRESH_RATE){
@@ -426,9 +455,9 @@ void lcdUpdate(){
     //First line displays the program and 
     //Version and name, only need to run a single time
     String version = "ESESPELS v.91    STP";
-    if(display_millis == 0){
+    /*if(display_millis == 0){
       lcdLineUpdate(0, version, current_LCD_line_1);
-    }
+    }*/
     display_millis = millis();
 
     //I know strings are evil but this section is not time sensitive and I don't care
@@ -476,65 +505,78 @@ void lcdUpdate(){
 
     //The actual RPM calculation.  I measured with an RPM detection device and it was within 1%
     float current_RPMs = rpm_delta/ENCODER_COUNTS_FULL_REV/ENCODER_FINAL_DRIVE_RATIO/seconds_since_last_update*60.0;
-    String RPMs_current = "RPMs = " + String(String(current_RPMs)+String("                    ")).substring(0,13);
+    String RPMs_current = "RPMs = " + String(String((int)current_RPMs)+String("                    ")).substring(0,13);
     rpm_display_last_count = rpm_display_current_count;
     display_last_updated_time = display_current_update_time;
-    lcdLineUpdate(1, RPMs_current, current_LCD_line_2);
+    /*lcdLineUpdate(1, RPMs_current, current_LCD_line_2);*/
 
     
     /*third line*/
-    String sfm_current = "SFM @ 1in: "+ String(String(current_RPMs/3.82) + String("            ")).substring(0,10);
 
-    lcdLineUpdate(2, sfm_current, current_LCD_line_3);
-  }
+    int raw = 4095 - analogRead(SFM_POT_INPUT);
+
+    total -= readings[readIndex];
+
+    // 2) read new ADC value into the buffer
+    readings[readIndex] = 4095 - analogRead(SFM_POT_INPUT);
+
+    // 3) add the new reading to the total
+    total += readings[readIndex];
+
+    // 4) advance (and wrap) the buffer index
+    readIndex = (readIndex + 1) % NUM_ADC_SAMPLES;
+
+    // 5) compute the moving‐average
+    averageRaw = total / NUM_ADC_SAMPLES;
+
+    /*float val = (averageRaw/4095.0) * MAX_INCH_FOR_SFM;*/
+    float val = (((int)(((((averageRaw/4095.0) * MAX_INCH_FOR_SFM))*8)))/8.0)+.125;
+    String sfm_current = "SFM @ " + String(val,3) + "in: "+ String(String(current_RPMs/3.82*val) + String("            ")).substring(0,10);
+
+    /*lcdLineUpdate(2, sfm_current, current_LCD_line_3);*/
   
   /*The feed string is updated only from the UI, so we want this to update as often as possible*/
 
-  String feed_string = "";
-  /*fourth line*/
+    String feed_string = "";
+    /*fourth line*/
 
-  String fwd_rev = String("FWD");
-  String on_off = String("ON ");
+    String fwd_rev = String("FWD");
+    String on_off = String("ON ");
 
-  if(UI_direction == UI_DIRECTION_BACKWARD){
-    fwd_rev = String("REV");
-  }
-  if(UI_on_off == -1){
-    on_off = String("OFF");
-  }
+    if(UI_direction == UI_DIRECTION_BACKWARD){
+      fwd_rev = String("REV");
+    }
+    if(UI_on_off == -1){
+      on_off = String("OFF");
+    }
 
 
-  if(run_mode == FEED_MODE){
-    /*To deal with the display of sub-thou feed oer revs*/
-    int feed_rate_int = int(feed_rate);
-    if(feed_rate >= 1){
-      feed_string = String("Feed: 0.") +String(String("000") + String(feed_rate_int)).substring(String(feed_rate_int).length(),String(String("000") + String(feed_rate_int)).length()) + String("  " + String(on_off) + String(" ") + fwd_rev);
+    if(run_mode == FEED_MODE){
+      /*To deal with the display of sub-thou feed oer revs*/
+      float feed_inches = feed_rate / 1000.0;
+      if (feed_rate >= 1) {
+        feed_string = String("Feed: ") + String(feed_inches, 3) + String("  " + on_off + " " + fwd_rev);
+      } else {
+        feed_string = String("Feed: ") + String(feed_inches, 4) + String(" " + on_off + " " + fwd_rev);
+      }
+    } else if(run_mode == TPI_MODE){
+      feed_string = String("TPI: ") + inch_TPIs[tpi_current_selected] + String("    ") + String(on_off) + String(" " + fwd_rev + "  ");
+    } else if(run_mode == PITCH_MODE){
+      feed_string = String("Pitch: ") + metric_pitches[metric_pitch_current_selected] + "  " + String(on_off) + " " + fwd_rev;
     } else{
-      feed_string = String("Feed: 0.000") + String(String(feed_rate_int*10))+ String(" " + String(on_off) + String(" ") + fwd_rev);
+      //do nothing
     }
-  } else if(run_mode == TPI_MODE){
-    feed_string = String("TPI: ") + inch_TPIs[tpi_current_selected] + String("    ") + String(on_off) + String(" " + fwd_rev + "  ");
-  } else if(run_mode == PITCH_MODE){
-    feed_string = String("Pitch: ") + metric_pitches[metric_pitch_current_selected] + "  " + String(on_off) + " " + fwd_rev;
-  } else{
-    //do nothing
-  }
 
-  lcdLineUpdate(3, feed_string, current_LCD_line_4);
-}
+    u8g2.clearBuffer();
+    u8g2.setFont(u8g2_font_ncenB08_tr);
 
-void lcdLineUpdate(int lcd_line, String &feed_string, char line_to_write[]){
-  /*
-    Does the actual LCD updating.  The LCD module I chose is super duper slow, so this
-    only updates characters that have changed, which keeps the display from being a
-    smeary mess
-  */
-  for(int i = 0; i < lcdColumns; i++){
-    if (feed_string.charAt(i) != line_to_write[i]){
-      lcd.setCursor(i,lcd_line);
-      lcd.print(feed_string[i]);
-      line_to_write[i] = feed_string.charAt(i);
-    }
+    // pick your X offset (here 0) and Y positions for each line
+    u8g2.drawStr(0, 10, version.c_str());
+    u8g2.drawStr(0, 22, RPMs_current.c_str());
+    u8g2.drawStr(0, 34, sfm_current.c_str());
+    u8g2.drawStr(0, 46, feed_string.c_str());
+
+    u8g2.sendBuffer();
   }
 }
 
@@ -562,13 +604,11 @@ void buttonCheck(){
           /*reset everything to default/zero when we switch modes*/
           stepper->setAcceleration(STEPPER_ACCELERATION);
           encoder.setCount(0);
-          lcdLineUpdate(0, version, current_LCD_line_1);
           steps_hold=0;
         } else{
           steps_mode = 0;
           String version = "ESESPELS v.91    SPD";
           encoder.setCount(0);
-          lcdLineUpdate(0, version, current_LCD_line_1);
           steps_hold=0;
         }
       }
@@ -595,6 +635,10 @@ void buttonCheck(){
     if(!digitalRead(ON_OFF_BUTTON)){
         on_off_debounce++;
         if(on_off_debounce == 2){
+          /*When turned off, reset everything to deal with over-speed issues*/
+          encoder.setCount(0);
+          last_count = 0;
+          stepper->stopMove();
           UI_on_off = UI_on_off * -1;
         }
       } else{
