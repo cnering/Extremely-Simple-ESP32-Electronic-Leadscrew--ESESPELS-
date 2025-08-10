@@ -142,7 +142,36 @@ float averageRaw = 0;          // filtered ADC value
 //u_int64_t last_timer = 0;
 //u_long calculations_per_second = 0;
 
+/*!!!STICKY POT VARIABLES!!!*/
+// === Pin & ADC config ===
+const int POT_PIN = SFM_POT_INPUT;              // Use ADC1 pin (32–39). Example: GPIO34.
+const adc_attenuation_t ATTEN = ADC_11db;  // 0–3.6V range (approx). Pick what fits your circuit.
 
+// === Output scaling & quantization ===
+const float OUT_MIN = 0.125f;
+const float OUT_MAX = 6.000f;
+const float STEP    = 0.125f;        // quantize step size
+
+// === Filter & behavior tuning ===
+const uint32_t SAMPLE_PERIOD_MS = 10;   // loop cadence
+const float    ALPHA_FAST = 0.45f;      // fast EMA response
+const float    ALPHA_SLOW = 0.06f;      // slow EMA response
+const float    MOTION_BAND_SCALED = 0.08f; // "difference" (in scaled units) to consider it moving
+const uint32_t QUIET_TIME_MS = 900;     // how long of quiet to stick
+// Extra guard so tiny jitter near the stuck value doesn't break it loose:
+const float    UNSTICK_EXTRA_BAND = 0.08f; // added to MOTION_BAND_SCALED when stuck
+
+// === Optional multi-sample median for each read (fights bursty spikes) ===
+const int MEDIAN_SAMPLES = 7;        // 5–9 is fine; keep odd
+
+// --- internals ---
+float emaFast = 0, emaSlow = 0;
+bool  initialized = false;
+bool  isStuck = false;
+float stuckValue = 0;                // scaled & quantized
+uint32_t lastMotionMs = 0;
+
+float sfm_val = 0.0;
 
 void setup(){
 
@@ -206,7 +235,13 @@ void setup(){
   // bump I2C up to 400 kHz for faster transfers
   Wire.setClock(400000UL);
 
+  /*DISPLAY*/
   u8g2.begin();
+
+  /*STICKY POT*/
+  analogReadResolution(12);                 // default is 12-bit
+  analogSetAttenuation(ATTEN);              // global
+  analogSetPinAttenuation(POT_PIN, ATTEN);  // per-pin (safe to call both)
 
 
 
@@ -230,6 +265,10 @@ void loop(){
   
   /*Update the display, including calculating things like RPM, thread pitch, feed rate, etc*/
   oledUpdate();
+
+  /*Calculate the SFM input from the potentiometer*/
+
+  sfm_val = readStickyPot();
 }
 
 void high_priority_loop(void * parameter){
@@ -512,26 +551,7 @@ void oledUpdate(){
 
     
     /*third line*/
-
-    int raw = 4095 - analogRead(SFM_POT_INPUT);
-
-    total -= readings[readIndex];
-
-    // 2) read new ADC value into the buffer
-    readings[readIndex] = 4095 - analogRead(SFM_POT_INPUT);
-
-    // 3) add the new reading to the total
-    total += readings[readIndex];
-
-    // 4) advance (and wrap) the buffer index
-    readIndex = (readIndex + 1) % NUM_ADC_SAMPLES;
-
-    // 5) compute the moving‐average
-    averageRaw = total / NUM_ADC_SAMPLES;
-
-    /*float val = (averageRaw/4095.0) * MAX_INCH_FOR_SFM;*/
-    float val = (((int)(((((averageRaw/4095.0) * MAX_INCH_FOR_SFM))*8)))/8.0)+.125;
-    String sfm_current = "SFM @ " + String(val,3) + "in: "+ String(String(current_RPMs/3.82*val) + String("            ")).substring(0,10);
+    String sfm_current = "SFM @ " + String(sfm_val,3) + "in: "+ String(String(current_RPMs/3.82*sfm_val) + String("            ")).substring(0,10);
 
     /*lcdLineUpdate(2, sfm_current, current_LCD_line_3);*/
   
@@ -686,6 +706,87 @@ void feed_hold_check(int pin){
         //do nothing
       }
     }
+  }
+}
+
+static int readADCMedian(int pin, int n) {
+  // small, in-place selection sort for tiny n
+  int v[15];                         // supports up to 15 safely
+  if (n > 15) n = 15;
+  for (int i = 0; i < n; ++i) {
+    v[i] = analogRead(pin);
+    // brief settling helps on some boards
+    delayMicroseconds(60);
+  }
+  for (int i = 0; i < n - 1; ++i) {
+    int minIdx = i;
+    for (int j = i + 1; j < n; ++j) if (v[j] < v[minIdx]) minIdx = j;
+    int t = v[i]; v[i] = v[minIdx]; v[minIdx] = t;
+  }
+  return v[n / 2];
+}
+
+static float quantizeToStep(float x, float step) {
+  return roundf(x / step) * step;
+}
+
+static float scaleADCtoRange(int raw) {
+  // ESP32 ADC is ~12-bit (0..4095) but non-linear; this linear map is usually good enough.
+  // If needed, calibrate endpoints.
+  const float ADC_MIN = 0.0f;
+  const float ADC_MAX = 4095.0f;
+  float t = (float(raw) - ADC_MIN) / (ADC_MAX - ADC_MIN);  // 0..1
+  if (t < 0) t = 0; if (t > 1) t = 1;
+  float y = OUT_MIN + t * (OUT_MAX - OUT_MIN);
+  return y;
+}
+
+float readStickyPot() {
+  // 1) Read + pre-filter
+  int raw = (MEDIAN_SAMPLES >= 3) ? readADCMedian(POT_PIN, MEDIAN_SAMPLES)
+                                  : analogRead(POT_PIN);
+  float scaled = scaleADCtoRange(raw);
+
+  // 2) Initialize EMAs on first run
+  if (!initialized) {
+    emaFast = emaSlow = scaled;
+    lastMotionMs = millis();
+    initialized = true;
+  }
+
+  // 3) Update filters
+  emaFast += ALPHA_FAST * (scaled - emaFast);
+  emaSlow += ALPHA_SLOW * (scaled - emaSlow);
+
+  float diff = fabsf(emaFast - emaSlow);
+  float motionBand = MOTION_BAND_SCALED + (isStuck ? UNSTICK_EXTRA_BAND : 0.0f);
+
+  uint32_t now = millis();
+
+  // 4) Motion detection
+  if (diff > motionBand) {
+    lastMotionMs = now;
+    isStuck = false; // we're moving again
+  }
+
+  // 5) Stick if quiet long enough
+  if (!isStuck && (now - lastMotionMs) > QUIET_TIME_MS) {
+    stuckValue = quantizeToStep(emaSlow, STEP);
+    // Clamp to range just in case rounding nudged it
+    if (stuckValue < OUT_MIN) stuckValue = OUT_MIN;
+    if (stuckValue > OUT_MAX) stuckValue = OUT_MAX;
+    isStuck = true;
+  }
+
+  // 6) Output
+  if (isStuck) {
+    return stuckValue;
+  } else {
+    // While moving, quantize the fast estimate so UI feels responsive but tidy
+    float v = quantizeToStep(emaFast, STEP);
+    if (v < OUT_MIN) v = OUT_MIN;
+    if (v > OUT_MAX) v = OUT_MAX;
+    return v;
   }
 }
 
